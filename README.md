@@ -13,7 +13,6 @@ Can large language models like ChatGPT actually generate alpha (or at least make
 
 - I provide it trading data on the stocks in it's portfolio.
 
-
 - Strict stop-loss rules apply.
 
 - Everyweek I allow it to use deep research to reevaluate it's account.
@@ -31,10 +30,14 @@ Visualization tools — Matplotlib graphs comparing ChatGPT vs DeepSeek
 
 Logs & trade data — Auto-saved logs for transparency
 
-# Performance Example (Week 2)
+# Performance Example (6/30 – 7/9)
+
+---
 
 
+![Week 2 Performance](6-30%20-%207-9.png)
 
+---
 
 # Why This Matters
 AI is being hyped across every industry — but can it really manage money effectively?
