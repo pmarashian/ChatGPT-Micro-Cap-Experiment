@@ -197,7 +197,7 @@ async function getAIDecision(portfolioData) {
 **Deliverables:**
 
 - Direct ChatGPT API integration
-- Structured response parsing
+- Structured response parsing (strict JSON schema; reject non-JSON and retry once)
 - Error handling and retry logic
 - Decision validation and safety checks
 
@@ -256,21 +256,22 @@ function calculateStopLoss(ticker, buyPrice, volatility) {
 ### **2.1 CRON Scheduling System**
 
 ```bash
-# Trading schedule
-# Morning strategy session (9:30 AM ET)
-30 9 * * 1-5 /usr/bin/node /app/morning_session.js
+# All schedules use UTC to avoid DST ambiguity (ET equivalents noted)
 
-# Midday monitoring (12:00 PM ET)
-0 12 * * 1-5 /usr/bin/node /app/midday_monitoring.js
+# Morning strategy session (optional) ≈ 13:30 UTC (9:30 AM ET DST)
+30 13 * * 1-5 /usr/bin/node /app/morning_session.js
 
-# Afternoon execution (4:00 PM ET)
-0 16 * * 1-5 /usr/bin/node /app/afternoon_execution.js
+# Midday monitoring (optional) ≈ 16:00 UTC (12:00 PM ET DST)
+0 16 * * 1-5 /usr/bin/node /app/midday_monitoring.js
 
-# Weekly deep research (Sunday 6:00 PM ET)
-0 18 * * 0 /usr/bin/node /app/weekly_research.js
+# Afternoon execution (market close) 20:00 UTC (4:00 PM ET DST)
+0 20 * * 1-5 /usr/bin/node /app/afternoon_execution.js
 
-# Daily reporting (5:00 PM ET)
-0 17 * * 1-5 /usr/bin/node /app/daily_reporting.js
+# Weekly deep research (Sunday) 21:00 UTC
+0 21 * * 0 /usr/bin/node /app/weekly_research.js
+
+# Daily reporting 21:00 UTC (5:00 PM ET DST)
+0 21 * * 1-5 /usr/bin/node /app/daily_reporting.js
 ```
 
 ### **2.2 Database Architecture**
@@ -493,6 +494,17 @@ async function sendDailyReport() {
   </body>
 </html>
 ```
+
+## **Operational Configuration Notes (Phase 1)**
+
+- SES identities (placeholders until verified in AWS SES):
+  - `SES_SENDER_EMAIL`: `no-reply@yourdomain.com`
+  - `ADMIN_EMAIL`: `alerts@yourdomain.com`
+  - `SES_REGION`: `us-east-1`
+- Brokerage (paper): Alpaca
+  - `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`
+  - `ALPACA_BASE_URL`: `https://paper-api.alpaca.markets`
+- AI decision format: strict JSON schema (see PHASE_1.md). Non-JSON responses are rejected and retried once.
 
 ## **Phase 5: Advanced Features (Weeks 17-20)**
 

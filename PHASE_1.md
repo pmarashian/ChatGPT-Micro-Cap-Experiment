@@ -115,6 +115,92 @@ Convert the current Python-based ChatGPT trading experiment to a **fully automat
 - ❌ Trade attribution analysis
 - ❌ Benchmark comparisons
 
+## **Decisions Locked for Phase 1**
+
+### AI Decision Output Schema (Strict JSON)
+
+All AI trading decisions must be returned as strict JSON. Non-JSON responses are rejected and retried once with an explicit instruction to respond in valid JSON only.
+
+```json
+{
+  "version": "1.0",
+  "generatedAt": "2025-09-02T20:00:00Z",
+  "decisions": [
+    {
+      "action": "BUY|SELL|HOLD",
+      "ticker": "ABEO",
+      "shares": 10,
+      "orderType": "market|limit",
+      "limitPrice": 6.25,
+      "timeInForce": "day|gtc",
+      "stopLoss": 5.4,
+      "reasoning": "Concise one-liner",
+      "confidence": 0.0
+    }
+  ],
+  "stopLossUpdates": [{ "ticker": "ABEO", "stopLoss": 6.0 }],
+  "riskAssessment": "Concise summary",
+  "notes": "Optional"
+}
+```
+
+Validation rules:
+
+- `ticker` uppercase; `action` in {BUY, SELL, HOLD}; `shares` integer ≥ 0.
+- `limitPrice` required if `orderType` = limit.
+- `stopLoss` required for BUY.
+- Default `timeInForce` = "day" if omitted.
+
+### Brokerage Provider (Paper) – Alpaca
+
+Brokerage integration will use Alpaca paper trading.
+
+- Env vars:
+  - `ALPACA_KEY_ID`
+  - `ALPACA_SECRET_KEY`
+  - `ALPACA_BASE_URL` (paper: `https://paper-api.alpaca.markets`)
+
+### Market Data Libraries
+
+Primary market data via `yahoo-finance2` with Stooq as fallback. Date handling mirrors the Python script:
+
+- Weekend-safe last trading date (Sat/Sun → Fri)
+- Daily window is `[date, date + 1 day)`
+
+### DynamoDB (Single-Table Design)
+
+Use one table (as `TradingTable`) with partition key `id`.
+
+- Portfolio item: `{ id: "portfolio", totalValue, cash, positions[], lastUpdated }`
+- Trade item: `{ id: "trade#YYYYMMDD#NNN", date, ticker, action, shares, price, aiReasoning }`
+- Config item: `{ id: "config", stopLossPercentage, maxPositionSize, aiProvider, aiModel }`
+
+No GSIs for MVP.
+
+### Email Delivery (SES)
+
+Simple text email via AWS SES.
+
+- Env vars:
+  - `SES_REGION` (e.g., `us-east-1`)
+  - `SES_SENDER_EMAIL` (placeholder: `no-reply@yourdomain.com`)
+  - `ADMIN_EMAIL` (placeholder: `alerts@yourdomain.com`)
+
+Note: Sender and recipient identities must be verified in SES for non-sandbox sending.
+
+### Scheduling (UTC)
+
+Lambda schedules will be configured in UTC to avoid DST ambiguity. ET equivalents are provided in comments.
+
+- Daily trading: 20:00 UTC (≈ 4:00 PM ET during DST)
+- Portfolio update: 20:30 UTC (≈ 4:30 PM ET DST)
+- Stop-loss sweep: every 15 min 13:00–20:00 UTC (≈ 9:00 AM–4:00 PM ET DST)
+- Daily email: 21:00 UTC (≈ 5:00 PM ET DST)
+
+### Backtesting Language Choice
+
+Backtesting utilities will be implemented in TypeScript (`ts-node`), while runtime handlers/services remain JavaScript for minimal friction.
+
 ## **Technical Implementation**
 
 ### **Project Structure**
