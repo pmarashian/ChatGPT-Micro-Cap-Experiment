@@ -25,6 +25,40 @@ Convert the current Python-based ChatGPT trading experiment to a **fully automat
 - **AWS EventBridge** for scheduling
 - **AWS API Gateway** for REST API endpoints
 
+## **LOCKED DECISIONS FOR PHASE 1** 🔒
+
+### **AI Provider**
+
+- **DECISION**: OpenAI GPT-4 exclusively for Phase 1 MVP
+- **REASON**: Focus on core functionality first, multi-provider support deferred
+- **CONFIG**: `AI_PROVIDER=openai`, `AI_MODEL=gpt-4`
+
+### **Database Design**
+
+- **DECISION**: Single-table DynamoDB design
+- **CONFIG**: Partition key `id`, no GSIs for MVP
+- **TABLE**: `TradingTable` with items: portfolio, trade#\*, config
+
+### **AWS Region**
+
+- **DECISION**: us-east-1
+- **REASON**: Default region as specified in project memory
+
+### **Email Configuration**
+
+- **DECISION**: phillip.marashian@gmail.com for all email functions
+- **CONFIG**: `SES_REGION=us-east-1`, `SES_SENDER_EMAIL=phillip.marashian@gmail.com`, `ADMIN_EMAIL=phillip.marashian@gmail.com`
+
+### **Scheduling**
+
+- **DECISION**: UTC timing for all schedules
+- **REASON**: Avoid DST ambiguity and timezone conversion issues
+
+### **Deployment**
+
+- **DECISION**: Single deployment pipeline for OpenAI configuration
+- **SCRIPT**: `npm run deploy:production` only
+
 ## **Success Criteria** ✅
 
 ### **Functional Requirements**
@@ -181,10 +215,11 @@ No GSIs for MVP.
 
 Simple text email via AWS SES.
 
-- Env vars:
-  - `SES_REGION` (e.g., `us-east-1`)
-  - `SES_SENDER_EMAIL` (placeholder: `no-reply@yourdomain.com`)
-  - `ADMIN_EMAIL` (placeholder: `alerts@yourdomain.com`)
+**PHASE 1 CONFIGURATION:**
+
+- `SES_REGION`: `us-east-1`
+- `SES_SENDER_EMAIL`: `phillip.marashian@gmail.com`
+- `ADMIN_EMAIL`: `phillip.marashian@gmail.com`
 
 Note: Sender and recipient identities must be verified in SES for non-sandbox sending.
 
@@ -256,8 +291,7 @@ phase-1/
     "axios": "^1.6.0",
     "moment": "^2.29.4",
     "lodash": "^4.17.21",
-    "openai": "^4.0.0",
-    "@anthropic-ai/sdk": "^0.9.0"
+    "openai": "^4.0.0"
   },
   "devDependencies": {
     "serverless": "^3.38.0",
@@ -271,9 +305,7 @@ phase-1/
     "backtest-day": "ts-node src/lib/backtesting/backtest-trigger.ts --date",
     "backtest-sequence": "ts-node src/lib/backtesting/backtest-trigger.ts --sequence",
     "download-historical-data": "ts-node src/lib/backtesting/data-downloader.ts",
-    "deploy:production": "serverless deploy --stage production",
-    "deploy:grok": "serverless deploy --stage grok",
-    "deploy:claude": "serverless deploy --stage claude"
+    "deploy:production": "serverless deploy --stage production"
   }
 }
 ```
@@ -377,23 +409,19 @@ resources:
             KeyType: HASH
 ```
 
-### **Multi-AI Model Environment Setup**
+### **AI Provider Setup (OpenAI First)**
+
+**PHASE 1 DECISION**: Use OpenAI GPT-4 exclusively for MVP. Multi-provider support deferred to future phases.
 
 ```bash
-# .env.production (ChatGPT)
+# .env.production (OpenAI GPT-4)
 AI_PROVIDER=openai
 AI_MODEL=gpt-4
 AI_API_KEY=sk-...
 
-# .env.staging-grok (Grok)
-AI_PROVIDER=grok
-AI_MODEL=grok-pro
-AI_API_KEY=grok-key...
-
-# .env.staging-claude (Claude)
-AI_PROVIDER=anthropic
-AI_MODEL=claude-3-sonnet-20240229
-AI_API_KEY=sk-ant-...
+# Future phases - multi-provider support:
+# AI_PROVIDER=grok|anthropic
+# AI_MODEL=grok-pro|claude-3-sonnet-20240229
 ```
 
 ## **API Endpoints Implementation**
@@ -569,49 +597,30 @@ module.exports.handler = async (event, context) => {
 
 ## **Core Services Implementation**
 
-### **AI Service (Configurable Provider)**
+### **AI Service (OpenAI GPT-4)**
+
+**PHASE 1 DECISION**: OpenAI GPT-4 exclusively for MVP.
 
 ```javascript
 // src/services/ai-service.js
 class AIService {
   constructor() {
-    this.provider = process.env.AI_PROVIDER || "openai";
+    this.provider = "openai"; // Fixed for Phase 1
     this.apiKey = process.env.AI_API_KEY;
     this.client = this.initializeClient();
   }
 
   initializeClient() {
-    switch (this.provider) {
-      case "openai":
-        const OpenAI = require("openai");
-        return new OpenAI({ apiKey: this.apiKey });
-      case "anthropic":
-        const Anthropic = require("@anthropic-ai/sdk");
-        return new Anthropic({ apiKey: this.apiKey });
-      case "grok":
-        // Grok API implementation when available
-        return null;
-      default:
-        throw new Error(`Unsupported AI provider: ${this.provider}`);
-    }
+    const OpenAI = require("openai");
+    return new OpenAI({ apiKey: this.apiKey });
   }
 
   async getTradingDecision(portfolioData, marketData) {
     try {
       const prompt = this.buildTradingPrompt(portfolioData, marketData);
-
-      switch (this.provider) {
-        case "openai":
-          return await this.callOpenAI(prompt);
-        case "anthropic":
-          return await this.callAnthropic(prompt);
-        case "grok":
-          return await this.callGrok(prompt);
-        default:
-          throw new Error(`Unsupported AI provider: ${this.provider}`);
-      }
+      return await this.callOpenAI(prompt);
     } catch (error) {
-      throw new Error(`${this.provider} API error: ${error.message}`);
+      throw new Error(`OpenAI API error: ${error.message}`);
     }
   }
 
@@ -636,25 +645,7 @@ class AIService {
     return this.parseTradingDecision(response.choices[0].message.content);
   }
 
-  async callAnthropic(prompt) {
-    const response = await this.client.messages.create({
-      model: "claude-3-sonnet-20240229",
-      max_tokens: 1000,
-      messages: [
-        {
-          role: "user",
-          content: `You are a professional portfolio strategist managing a micro-cap biotech portfolio. Make clear, actionable trading decisions.\n\n${prompt}`,
-        },
-      ],
-    });
-
-    return this.parseTradingDecision(response.content[0].text);
-  }
-
-  async callGrok(prompt) {
-    // Implementation for Grok when API becomes available
-    throw new Error("Grok API not yet implemented");
-  }
+  // Phase 1: OpenAI GPT-4 only - multi-provider support in future phases
 
   buildTradingPrompt(portfolioData, marketData) {
     // Build the daily trading prompt based on current portfolio and market data
@@ -995,15 +986,11 @@ npm run backtest-sequence --start=2023-01-15 --end=2023-01-31
 
 ### **3. Deploy to AWS**
 
+**PHASE 1 DECISION**: Single deployment with OpenAI GPT-4.
+
 ```bash
-# Deploy ChatGPT version to production
+# Deploy to production (OpenAI GPT-4)
 npm run deploy:production
-
-# Deploy Grok version to staging
-npm run deploy:grok
-
-# Deploy Claude version to staging
-npm run deploy:claude
 
 # Test deployed functions
 serverless invoke -f dailyTrading --stage production

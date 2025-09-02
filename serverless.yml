@@ -1,0 +1,152 @@
+service: chatgpt-trading-phase1
+
+plugins:
+  - serverless-dotenv-plugin
+
+custom:
+  dotenv:
+    path: .env.${opt:stage, 'dev'}
+    include:
+      - AI_PROVIDER
+      - AI_MODEL
+      - AI_API_KEY
+      - ALPACA_KEY_ID
+      - ALPACA_SECRET_KEY
+      - ALPACA_BASE_URL
+      - SES_REGION
+      - SES_SENDER_EMAIL
+      - ADMIN_EMAIL
+      - EXECUTE_TRADES
+      - STARTING_CASH
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  profile: autotrader
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource:
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:service}-${opt:stage, self:provider.stage}
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+          Resource: "*"
+  environment:
+    AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
+    AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
+    AI_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):AI_API_KEY}
+    ALPACA_KEY_ID: ${file(.env.${opt:stage, 'dev'}.json):ALPACA_KEY_ID}
+    ALPACA_SECRET_KEY: ${file(.env.${opt:stage, 'dev'}.json):ALPACA_SECRET_KEY}
+    ALPACA_BASE_URL: ${file(.env.${opt:stage, 'dev'}.json):ALPACA_BASE_URL}
+    SES_REGION: ${file(.env.${opt:stage, 'dev'}.json):SES_REGION}
+    SES_SENDER_EMAIL: ${file(.env.${opt:stage, 'dev'}.json):SES_SENDER_EMAIL}
+    ADMIN_EMAIL: ${file(.env.${opt:stage, 'dev'}.json):ADMIN_EMAIL}
+    EXECUTE_TRADES: ${file(.env.${opt:stage, 'dev'}.json):EXECUTE_TRADES}
+    STARTING_CASH: ${file(.env.${opt:stage, 'dev'}.json):STARTING_CASH}
+    SERVICE_NAME: ${self:service}
+    STAGE: ${opt:stage, self:provider.stage}
+
+functions:
+  # Scheduled Functions
+  dailyTrading:
+    handler: src/handlers/scheduled/daily-trading.handler
+    events:
+      - schedule: rate(1 day) # Daily at 4 PM ET approximation
+    environment:
+      AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
+      AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
+
+  portfolioUpdate:
+    handler: src/handlers/scheduled/portfolio-update.handler
+    events:
+      - schedule: rate(1 day) # Daily portfolio update
+
+  stopLoss:
+    handler: src/handlers/scheduled/stop-loss.handler
+    events:
+      - schedule: rate(15 minutes) # Every 15 min
+
+  emailReport:
+    handler: src/handlers/scheduled/email-report.handler
+    events:
+      - schedule: rate(1 day) # Daily email report
+
+  # REST API Endpoints
+  getPortfolio:
+    handler: src/handlers/api/get-portfolio.handler
+    events:
+      - http:
+          path: /api/portfolio
+          method: get
+          cors: true
+
+  getTradingHistory:
+    handler: src/handlers/api/get-trading-history.handler
+    events:
+      - http:
+          path: /api/trading-history
+          method: get
+          cors: true
+
+  updateConfiguration:
+    handler: src/handlers/api/update-configuration.handler
+    events:
+      - http:
+          path: /api/configuration
+          method: put
+          cors: true
+
+  triggerBacktest:
+    handler: src/handlers/api/trigger-backtest.handler
+    events:
+      - http:
+          path: /api/backtest
+          method: post
+          cors: true
+
+  getSystemStatus:
+    handler: src/handlers/api/get-system-status.handler
+    events:
+      - http:
+          path: /api/status
+          method: get
+          cors: true
+
+  triggerDailyTrading:
+    handler: src/handlers/api/trigger-daily-trading.handler
+    events:
+      - http:
+          path: /api/trigger-daily-trading
+          method: post
+          cors: true
+
+resources:
+  Resources:
+    TradingTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${opt:stage, self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH

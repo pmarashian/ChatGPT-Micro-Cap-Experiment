@@ -1,0 +1,41 @@
+{
+  "name": "chatgpt-trading-phase1",
+  "version": "1.0.0",
+  "description": "Fully automated ChatGPT trading system using serverless architecture",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test-system.js",
+    "migrate-data": "node migrate-data.js",
+    "backtest-day": "ts-node src/lib/backtesting/backtest-trigger.ts --date",
+    "backtest-sequence": "ts-node src/lib/backtesting/backtest-trigger.ts --sequence",
+    "download-historical-data": "ts-node src/lib/backtesting/data-downloader.ts",
+    "deploy:production": "serverless deploy --stage production"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1500.0",
+    "axios": "^1.6.0",
+    "csv-parser": "^3.0.0",
+    "lodash": "^4.17.21",
+    "moment": "^2.29.4",
+    "openai": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "eslint": "^8.55.0",
+    "jest": "^29.7.0",
+    "js-yaml": "^4.1.0",
+    "serverless": "^3.38.0",
+    "serverless-dotenv-plugin": "^6.0.0",
+    "serverless-offline": "^13.3.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "trading",
+    "chatgpt",
+    "serverless",
+    "aws",
+    "lambda"
+  ],
+  "author": "Phillip Marashian",
+  "license": "MIT"
+}
