@@ -14,6 +14,11 @@ const ITEM_TYPES = {
   PORTFOLIO: "portfolio",
   TRADE: "trade",
   CONFIG: "config",
+  // New AI memory and research persistence
+  AI_RESEARCH: "ai_research",
+  AI_DECISION: "ai_decision",
+  MARKET_DATA: "market_data",
+  PORTFOLIO_CONFIG: "portfolio_config",
 };
 
 // Default benchmark tickers (same as Python script)
@@ -27,6 +32,40 @@ const SCHEDULES = {
   EMAIL_REPORT: "0 17 * * 1-5", // 5 PM ET weekdays
 };
 
+// Portfolio configuration (stored in DB for easy modification)
+const PORTFOLIO_CONFIG = {
+  TARGET_POSITIONS: {
+    MIN: 8,
+    MAX: 12,
+    DEFAULT: 10,
+  },
+  POSITION_SIZING: {
+    MAX_PERCENT: 0.12, // 12% of portfolio per position
+    MIN_PERCENT: 0.03, // 3% of portfolio per position
+    DEFAULT_MAX_PERCENT: 0.12,
+  },
+  RISK_MANAGEMENT: {
+    STOP_LOSS_MIN: 0.2, // 20% below entry
+    STOP_LOSS_MAX: 0.3, // 30% below entry
+    DEFAULT_STOP_LOSS: 0.25,
+  },
+  MARKET_DATA_CACHE: {
+    TTL_MINUTES: 60, // Cache market data for 1 hour (research pipeline)
+    MAX_AGE_HOURS: 24, // Don't use data older than 24 hours
+  },
+  // Research pipeline configuration
+  RESEARCH: {
+    FREQUENCY_HOURS: 12, // Research every 12 hours
+    MAX_TIMEOUT_SECONDS: 600, // 10 minutes for deep research
+    MIN_TIMEOUT_SECONDS: 180, // 3 minutes for trading decisions
+    RETENTION_DAYS: {
+      RESEARCH: 30, // Keep research for 30 days
+      DECISIONS: 90, // Keep decisions for 90 days
+      MARKET_DATA: 1, // Keep market data for 1 day
+    },
+  },
+};
+
 // Risk management constants
 const RISK_PARAMS = {
   DEFAULT_STOP_LOSS_PERCENTAGE: 0.15, // 15%
@@ -36,11 +75,25 @@ const RISK_PARAMS = {
 
 // AI decision schema validation
 const AI_DECISION_SCHEMA = {
-  version: "1.0",
-  requiredFields: ["version", "generatedAt", "decisions"],
-  decisionFields: ["action", "ticker", "shares", "orderType", "timeInForce"],
-  validActions: ["BUY", "SELL", "HOLD"],
+  version: "2.0",
+  requiredFields: ["version", "generatedAt", "decisions", "researchSummary"],
+  decisionFields: [
+    "action",
+    "ticker",
+    "shares",
+    "orderType",
+    "timeInForce",
+    "research",
+    "rationale",
+  ],
+  validActions: ["BUY", "SELL", "HOLD", "RESEARCH"],
   validOrderTypes: ["market", "limit"],
+  optionalFields: [
+    "newDiscoveries",
+    "portfolioStrategy",
+    "riskAssessment",
+    "nextResearchFocus",
+  ],
 };
 
 // Error handling constants
@@ -84,6 +137,7 @@ module.exports = {
   ITEM_TYPES,
   DEFAULT_BENCHMARKS,
   SCHEDULES,
+  PORTFOLIO_CONFIG,
   RISK_PARAMS,
   AI_DECISION_SCHEMA,
   ERROR_TYPES,

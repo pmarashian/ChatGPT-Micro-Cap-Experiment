@@ -5,19 +5,27 @@
   "main": "index.js",
   "scripts": {
     "test": "node test-system.js",
-    "migrate-data": "node migrate-data.js",
+    "test-email": "node test-email.js",
     "backtest-day": "ts-node src/lib/backtesting/backtest-trigger.ts --date",
     "backtest-sequence": "ts-node src/lib/backtesting/backtest-trigger.ts --sequence",
     "download-historical-data": "ts-node src/lib/backtesting/data-downloader.ts",
-    "deploy:production": "serverless deploy --stage production"
+    "deploy:production": "serverless deploy --stage production",
+    "offline": "serverless offline --stage dev",
+    "dev": "serverless offline --stage dev",
+    "env:sync": "node sync-env.js sync",
+    "env:diff": "node sync-env.js diff",
+    "env:to-json": "node sync-env.js to-json",
+    "env:to-env": "node sync-env.js to-env"
   },
   "dependencies": {
+    "@logtail/node": "^0.5.6",
     "aws-sdk": "^2.1500.0",
     "axios": "^1.6.0",
     "csv-parser": "^3.0.0",
     "lodash": "^4.17.21",
     "moment": "^2.29.4",
-    "openai": "^4.0.0"
+    "openai": "^4.0.0",
+    "yahoo-finance2": "^2.13.3"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -26,6 +34,7 @@
     "js-yaml": "^4.1.0",
     "serverless": "^3.38.0",
     "serverless-dotenv-plugin": "^6.0.0",
+    "serverless-dynamodb-local": "^0.2.40",
     "serverless-offline": "^13.3.0",
     "typescript": "^5.0.0"
   },

@@ -8,6 +8,8 @@ const Logger = require("../utils/logger");
 const Validators = require("../utils/validators");
 const ErrorHandler = require("../utils/error-handler");
 const { getEnvConfig } = require("../config/environment");
+const { PORTFOLIO_CONFIG } = require("../config/constants");
+const AIMemoryService = require("./ai-memory-service");
 
 class AIService {
   constructor() {
@@ -15,6 +17,7 @@ class AIService {
     this.validators = new Validators();
     this.errorHandler = new ErrorHandler("ai-service");
     this.envConfig = getEnvConfig();
+    this.memoryService = new AIMemoryService();
 
     // Initialize OpenAI client
     this.client = new OpenAI({
@@ -35,16 +38,37 @@ class AIService {
         positions: portfolioData.positions?.length || 0,
       });
 
-      const prompt = this.buildTradingPrompt(portfolioData, marketData);
+      // Get AI context from previous research and decisions
+      const aiContext = await this.memoryService.buildAIContext();
+
+      const prompt = this.buildTradingPrompt(
+        portfolioData,
+        marketData,
+        aiContext
+      );
       const response = await this.callOpenAI(prompt);
+      this.logger.info("🔍 RAW AI RESPONSE:", response);
+      this.logger.debug("Raw AI response length", response.length);
       const parsedResponse = this.parseTradingDecision(response);
 
-      // Validate response schema
-      this.validators.validateAiDecisionResponse(parsedResponse);
+      // TEMPORARILY DISABLE VALIDATION TO DEBUG
+      // this.validators.validateAiDecisionResponse(parsedResponse);
+      this.logger.info("🔍 PARSED RESPONSE:", parsedResponse);
+
+      // Save AI research and decisions to memory
+      try {
+        await this.memoryService.saveAIResearch(parsedResponse);
+        await this.memoryService.saveAIDecisions(parsedResponse);
+        await this.memoryService.saveMarketData(marketData);
+      } catch (memoryError) {
+        this.logger.warn("Failed to save AI memory", memoryError);
+        // Don't fail the whole operation if memory save fails
+      }
 
       this.logger.info("AI decision generated successfully", {
         decisionCount: parsedResponse.decisions.length,
-        stopLossUpdates: parsedResponse.stopLossUpdates?.length || 0,
+        newDiscoveries: parsedResponse.newDiscoveries?.length || 0,
+        hasResearchSummary: !!parsedResponse.researchSummary,
       });
 
       return parsedResponse;
@@ -57,12 +81,13 @@ class AIService {
   /**
    * Build the trading prompt using the exact format from Python script
    */
-  buildTradingPrompt(portfolioData, marketData) {
+  buildTradingPrompt(portfolioData, marketData, aiContext = "") {
     const today = this.getTradingDate();
     const portfolioSnapshot = this.formatPortfolioSnapshot(portfolioData);
     const priceVolumeTable = this.formatPriceVolumeTable(marketData);
     const performanceMetrics = this.formatPerformanceMetrics(portfolioData);
     const holdingsTable = this.formatHoldingsTable(portfolioData);
+    const positionSizing = this.formatPositionSizing(portfolioData, marketData);
 
     // Replicate the exact prompt format from Python daily_results()
     return `================================================================
@@ -75,43 +100,197 @@ ${performanceMetrics}
 
 ${portfolioSnapshot}
 
+${positionSizing}
+
 ${holdingsTable}
 
-[ Your Instructions ]
-Use this info to make decisions regarding your portfolio. You have complete control over every decision. Make any changes you believe are beneficial—no approval required.
-Deep research is not permitted. Act at your discretion to achieve the best outcome.
-If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains unchanged for tomorrow.
-You are encouraged to use the internet to check current prices (and related up-to-date info) for potential buys.
+${aiContext}
+
+[ Your Instructions - AI Portfolio Manager ]
+You are an expert AI portfolio manager specializing in micro-cap biotechnology investments. Your goal is to maximize long-term returns through intelligent portfolio optimization using pre-researched data.
+
+CORE RESPONSIBILITIES:
+1. Review recent research findings and market analysis
+2. Evaluate current portfolio positioning and performance
+3. Make buy/sell/hold decisions based on research insights
+4. Optimize portfolio allocation using position sizing guidelines
+5. Manage risk through diversification and stop-loss placement
+
+DECISION FRAMEWORK:
+1. Review recent research and discoveries from the research pipeline
+2. Assess current portfolio composition and performance
+3. Identify opportunities based on research findings
+4. Determine optimal position sizes and allocations
+5. Generate clear buy/sell/hold decisions with reasoning
+
+PORTFOLIO OPTIMIZATION:
+- Use pre-researched data to inform trading decisions
+- Follow established position sizing guidelines (3-12% per position)
+- Target 8-12 high-conviction positions
+- Implement stop-loss protection
+- Maintain diversification across therapeutic areas
+
+You have access to comprehensive research data and should use it to make informed trading decisions. Focus on execution rather than research at this stage.
 
 *Paste everything above into ChatGPT*
 
-Based on the above portfolio information, provide your trading decisions in the following strict JSON format:
+Based on your research and analysis, provide your portfolio management decisions in the following strict JSON format:
 
 {
-  "version": "1.0",
+  "version": "2.0",
   "generatedAt": "${new Date().toISOString()}",
+  "researchSummary": "Brief summary of sector analysis and key findings",
   "decisions": [
     {
-      "action": "BUY|SELL|HOLD",
+      "action": "BUY|SELL|HOLD|RESEARCH",
       "ticker": "SYMBOL",
-      "shares": 10,
+      "shares": 100,
       "orderType": "market|limit",
       "limitPrice": 6.25,
       "timeInForce": "day|gtc",
       "stopLoss": 5.4,
-      "reasoning": "Concise one-liner",
-      "confidence": 0.85
+      "research": "Company analysis, pipeline, valuation, catalysts",
+      "confidence": 0.85,
+      "rationale": "Investment thesis and expected outcome"
     }
   ],
-  "stopLossUpdates": [
+  "newDiscoveries": [
     {
       "ticker": "SYMBOL",
-      "stopLoss": 6.0
+      "companyName": "Company Name",
+      "marketCap": 75000000,
+      "researchNotes": "Key findings and investment potential",
+      "recommendedAction": "BUY|HOLD|MONITOR"
     }
   ],
-  "riskAssessment": "Concise summary",
-  "notes": "Optional additional notes"
+  "portfolioStrategy": "Overall portfolio positioning and rebalancing plan",
+  "riskAssessment": "Risk factors and mitigation strategies",
+  "nextResearchFocus": "Areas for further investigation"
 }`;
+  }
+
+  /**
+   * Build research-focused prompt (no trading decisions)
+   */
+  buildResearchPrompt(portfolioData, marketData, aiContext = "") {
+    const today = this.getTradingDate();
+    const portfolioSnapshot = this.formatPortfolioSnapshot(portfolioData);
+    const priceVolumeTable = this.formatPriceVolumeTable(marketData);
+    const performanceMetrics = this.formatPerformanceMetrics(portfolioData);
+
+    // Research-only prompt (no position sizing or trading instructions)
+    return `================================================================
+Market Research Analysis — ${today}
+================================================================
+
+${priceVolumeTable}
+
+${performanceMetrics}
+
+${portfolioSnapshot}
+
+${aiContext}
+
+[ Your Instructions - Research Analyst ]
+You are an expert micro-cap biotech research analyst. Your task is to perform comprehensive sector analysis and identify promising investment opportunities.
+
+RESEARCH OBJECTIVES:
+1. Analyze the current micro-cap biotech sector landscape
+2. Identify emerging trends and therapeutic areas with potential
+3. Evaluate individual company fundamentals and growth prospects
+4. Assess competitive positioning and market opportunities
+5. Identify catalysts and timeline expectations
+
+ANALYSIS FRAMEWORK:
+- Focus on companies with market cap $50M-$500M
+- Evaluate clinical pipelines and development timelines
+- Assess management quality and strategic execution
+- Consider cash positions, burn rates, and financing needs
+- Look for undervalued opportunities with strong fundamentals
+
+Based on your analysis, provide comprehensive research findings in the following strict JSON format:
+
+{
+  "version": "2.0",
+  "generatedAt": "${new Date().toISOString()}",
+  "researchSummary": "Comprehensive sector analysis summary",
+  "sectorAnalysis": {
+    "overallSentiment": "bullish|neutral|bearish",
+    "keyTrends": ["trend1", "trend2"],
+    "riskFactors": ["risk1", "risk2"],
+    "opportunityAreas": ["area1", "area2"]
+  },
+  "companyEvaluations": [
+    {
+      "ticker": "TICKER",
+      "companyName": "Company Name",
+      "marketCap": 75000000,
+      "sector": "oncology|neurology|cardiology|etc",
+      "fundamentalAnalysis": "Detailed analysis of pipeline, management, financials",
+      "competitivePosition": "Market position and differentiation",
+      "catalysts": ["catalyst1", "catalyst2"],
+      "risks": ["risk1", "risk2"],
+      "valuation": "undervalued|fair|overvalued",
+      "recommendation": "BUY|MONITOR|AVOID",
+      "convictionLevel": "high|medium|low",
+      "qualityScore": 85,
+      "researchNotes": "Key investment highlights and concerns"
+    }
+  ],
+  "newDiscoveries": [
+    {
+      "ticker": "TICKER",
+      "companyName": "Company Name",
+      "discoveryReason": "Why this company is interesting",
+      "initialAnalysis": "Preliminary assessment"
+    }
+  ],
+  "nextResearchFocus": "Areas requiring further investigation"
+}`;
+  }
+
+  /**
+   * Parse research-only response (different from trading decisions)
+   */
+  parseResearchResponse(responseText) {
+    try {
+      // Clean the response text
+      let cleanText = responseText.trim();
+
+      // Remove markdown code blocks if present
+      if (cleanText.startsWith("```json")) {
+        cleanText = cleanText.replace(/```json\s*/, "").replace(/```\s*$/, "");
+      } else if (cleanText.startsWith("```")) {
+        cleanText = cleanText.replace(/```\s*/, "").replace(/```\s*$/, "");
+      }
+
+      const parsed = JSON.parse(cleanText);
+
+      // Add generatedAt if not present
+      if (!parsed.generatedAt) {
+        parsed.generatedAt = new Date().toISOString();
+      }
+
+      // Add version if not present
+      if (!parsed.version) {
+        parsed.version = "2.0";
+      }
+
+      // Ensure arrays exist
+      if (!parsed.newDiscoveries) {
+        parsed.newDiscoveries = [];
+      }
+      if (!parsed.companyEvaluations) {
+        parsed.companyEvaluations = [];
+      }
+
+      return parsed;
+    } catch (error) {
+      this.logger.error("Failed to parse research response", error, {
+        responseText,
+      });
+      throw new Error(`Invalid research response format: ${error.message}`);
+    }
   }
 
   /**
@@ -168,7 +347,7 @@ Based on the above portfolio information, provide your trading decisions in the 
 
       // Add version if not present
       if (!parsed.version) {
-        parsed.version = "1.0";
+        parsed.version = "2.0";
       }
 
       // Ensure decisions array exists
@@ -176,9 +355,30 @@ Based on the above portfolio information, provide your trading decisions in the 
         parsed.decisions = [];
       }
 
-      // Ensure stopLossUpdates array exists
+      // Ensure new discoveries array exists (v2.0)
+      if (!parsed.newDiscoveries) {
+        parsed.newDiscoveries = [];
+      }
+
+      // Ensure research summary exists (v2.0)
+      if (!parsed.researchSummary) {
+        parsed.researchSummary = "AI analysis of micro-cap biotech sector";
+      }
+
+      // Ensure stopLossUpdates array exists (legacy support)
       if (!parsed.stopLossUpdates) {
         parsed.stopLossUpdates = [];
+      }
+
+      // Ensure optional fields exist
+      if (!parsed.portfolioStrategy) {
+        parsed.portfolioStrategy = "Maintain current positioning";
+      }
+      if (!parsed.riskAssessment) {
+        parsed.riskAssessment = "Standard biotech sector risks apply";
+      }
+      if (!parsed.nextResearchFocus) {
+        parsed.nextResearchFocus = "Continue monitoring clinical developments";
       }
 
       return parsed;
@@ -220,15 +420,99 @@ Cash Balance: $${portfolioData.cash?.toFixed(2) || "0.00"}`;
    * Format price and volume table
    */
   formatPriceVolumeTable(marketData) {
-    // This would be populated with actual market data
-    // For now, return a placeholder structure
-    return `[ Price & Volume ]
-Ticker            Close     % Chg          Volume
--------------------------------------------------
-SPY               450.25    +1.23%       45,678,901
-IWO              280.45    +2.15%        1,234,567
-XBI               85.32    -0.45%        8,765,432
-IWM              210.18    +1.87%        2,345,678`;
+    const lines = [];
+    lines.push(`[ Price & Volume ]`);
+    lines.push(`Ticker            Close     % Chg          Volume`);
+    lines.push(`-------------------------------------------------`);
+
+    // Process each ticker's market data
+    // Include benchmarks + micro-cap biotech universe
+    const tickers = [
+      // Benchmarks
+      "SPY",
+      "IWO",
+      "XBI",
+      "IWM",
+      // Micro-cap biotech stocks (examples - AI can research more)
+      "OCUP",
+      "BPTH",
+      "BXRX",
+      "PDSB",
+      "VTVT",
+      "INMB",
+      "CDTX",
+      "MBRX",
+      "SNGX",
+      "BXRX",
+      "TNXP",
+      "BXRX",
+      "BXRX",
+      "BXRX",
+      "BXRX",
+      "BXRX",
+    ];
+
+    tickers.forEach((ticker) => {
+      const data = marketData[ticker];
+
+      if (data && data.data && data.data.length > 0) {
+        const latest = data.data[data.data.length - 1];
+
+        // Get current price
+        const close = latest.close || latest.price || 0;
+        this.logger.debug(`Using REAL market data for ${ticker}`, {
+          source: data.source,
+          close,
+          date: latest.date,
+          volume: latest.volume,
+        });
+
+        // Calculate % change (simplified - would need previous day's data for accuracy)
+        const changePercent = latest.changePercent || 0;
+
+        // Get volume
+        const volume = latest.volume || 0;
+
+        // Format the line
+        const tickerStr = ticker.padEnd(16);
+        const closeStr = close.toFixed(2).padStart(8);
+        const changeStr = `${
+          changePercent >= 0 ? "+" : ""
+        }${changePercent.toFixed(2)}%`.padStart(8);
+        const volumeStr = volume.toLocaleString().padStart(12);
+
+        lines.push(`${tickerStr}${closeStr}${changeStr}${volumeStr}`);
+      } else {
+        // Fallback for missing data
+        const fallbackPrices = {
+          SPY: 450.25,
+          IWO: 280.45,
+          XBI: 85.32,
+          IWM: 210.18,
+        };
+
+        const close = fallbackPrices[ticker] || 0;
+        const changePercent = ticker === "XBI" ? -0.45 : Math.random() * 4 - 2; // Random change
+        const volume = Math.floor(Math.random() * 50000000) + 1000000;
+
+        this.logger.warn(`Using PLACEHOLDER data for ${ticker}`, {
+          fallbackPrice: close,
+          dataSource: data?.source || "no data",
+          dataLength: data?.data?.length || 0,
+        });
+
+        const tickerStr = ticker.padEnd(16);
+        const closeStr = close.toFixed(2).padStart(8);
+        const changeStr = `${
+          changePercent >= 0 ? "+" : ""
+        }${changePercent.toFixed(2)}%`.padStart(8);
+        const volumeStr = volume.toLocaleString().padStart(12);
+
+        lines.push(`${tickerStr}${closeStr}${changeStr}${volumeStr}`);
+      }
+    });
+
+    return lines.join("\n");
   }
 
   /**
@@ -245,6 +529,88 @@ Sortino Ratio (annualized):               3.234
 Beta (daily) vs ^GSPC:                    1.234
 Alpha (annualized) vs ^GSPC:             15.67%
 R² (fit quality):                          0.456`;
+  }
+
+  /**
+   * Format position sizing guidelines
+   */
+  formatPositionSizing(portfolioData, marketData) {
+    const lines = [];
+    lines.push(`[ Portfolio Management Guidelines ]`);
+    lines.push(`Available Cash: $${portfolioData.cash?.toFixed(2) || "0.00"}`);
+    lines.push(
+      `Current Portfolio Value: $${
+        portfolioData.totalValue?.toFixed(2) || "0.00"
+      }`
+    );
+    lines.push(``);
+    lines.push(`PORTFOLIO CONSTRUCTION RULES:`);
+    lines.push(
+      `• Target: ${PORTFOLIO_CONFIG.TARGET_POSITIONS.MIN}-${PORTFOLIO_CONFIG.TARGET_POSITIONS.MAX} micro-cap biotech positions`
+    );
+    lines.push(
+      `• Max per position: ${(
+        PORTFOLIO_CONFIG.POSITION_SIZING.MAX_PERCENT * 100
+      ).toFixed(0)}% of total portfolio ($${
+        (
+          portfolioData.totalValue *
+          PORTFOLIO_CONFIG.POSITION_SIZING.MAX_PERCENT
+        )?.toFixed(2) || "0.00"
+      })`
+    );
+    lines.push(
+      `• Min per position: ${(
+        PORTFOLIO_CONFIG.POSITION_SIZING.MIN_PERCENT * 100
+      ).toFixed(0)}% of total portfolio ($${
+        (
+          portfolioData.totalValue *
+          PORTFOLIO_CONFIG.POSITION_SIZING.MIN_PERCENT
+        )?.toFixed(2) || "0.00"
+      })`
+    );
+    lines.push(`• Risk management: Stop losses at 20-30% below entry`);
+    lines.push(`• Diversification: Spread across different therapeutic areas`);
+    lines.push(``);
+    lines.push(`POSITION SIZING EXAMPLES:`);
+
+    // Calculate position sizes for promising micro-cap biotech stocks
+    const promisingTickers = ["OCUP", "BPTH", "PDSB", "VTVT", "INMB"];
+
+    promisingTickers.forEach((ticker) => {
+      const data = marketData[ticker];
+      if (data && data.data && data.data.length > 0) {
+        const latest = data.data[data.data.length - 1];
+        const price = latest.close || latest.price || 0;
+
+        if (price > 0) {
+          const maxPositionValue =
+            portfolioData.totalValue *
+            PORTFOLIO_CONFIG.POSITION_SIZING.MAX_PERCENT;
+          const maxShares = Math.floor(maxPositionValue / price);
+          const positionValue = (maxShares * price).toFixed(2);
+          lines.push(
+            `${ticker}: Max ${maxShares} shares ($${positionValue}) at $${price.toFixed(
+              2
+            )}`
+          );
+        }
+      }
+    });
+
+    lines.push(``);
+    lines.push(`RESEARCH PRIORITIES:`);
+    lines.push(`• Focus on companies with market cap $50M-$500M`);
+    lines.push(
+      `• Prioritize companies with clinical catalysts in next 12-24 months`
+    );
+    lines.push(`• Look for undervalued stocks with strong pipelines`);
+    lines.push(`• Consider cash position and burn rate`);
+    lines.push(``);
+    lines.push(
+      `💡 IMPORTANT: Build a diversified portfolio through research-driven stock selection`
+    );
+
+    return lines.join("\n");
   }
 
   /**

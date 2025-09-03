@@ -1,51 +1,84 @@
 /**
  * Centralized logging utility for consistent logging across the system
- * Supports CloudWatch integration and structured logging
+ * Supports Logtail integration and structured logging
  */
+
+const { Logtail } = require("@logtail/node");
 
 class Logger {
   constructor(context = "system") {
     this.context = context;
-  }
 
-  _formatMessage(level, message, data = {}) {
-    const timestamp = new Date().toISOString();
-    const logEntry = {
-      timestamp,
-      level,
-      context: this.context,
-      message,
-      ...data,
-    };
+    // Get Logtail configuration from environment variables
+    const sourceToken = process.env.LOGTAIL_SOURCE_TOKEN;
+    const endpoint = process.env.LOGTAIL_ENDPOINT;
 
-    return JSON.stringify(logEntry);
+    if (sourceToken && endpoint) {
+      this.logtail = new Logtail(sourceToken, {
+        endpoint: endpoint,
+      });
+    } else {
+      // Fallback to console logging if Logtail is not configured
+      console.warn(
+        "Logtail not configured. Using console logging. Set LOGTAIL_SOURCE_TOKEN and LOGTAIL_ENDPOINT environment variables."
+      );
+      this.logtail = null;
+    }
   }
 
   info(message, data = {}) {
-    console.log(this._formatMessage("INFO", message, data));
+    if (this.logtail) {
+      this.logtail.info(message, {
+        context: this.context,
+        ...data,
+      });
+    } else {
+      console.log(`[INFO] [${this.context}] ${message}`, data);
+    }
   }
 
   warn(message, data = {}) {
-    console.warn(this._formatMessage("WARN", message, data));
+    if (this.logtail) {
+      this.logtail.warn(message, {
+        context: this.context,
+        ...data,
+      });
+    } else {
+      console.warn(`[WARN] [${this.context}] ${message}`, data);
+    }
   }
 
   error(message, error = null, data = {}) {
     const errorData = {
+      context: this.context,
       ...data,
-      error: error
-        ? {
-            message: error.message,
-            stack: error.stack,
-            name: error.name,
-          }
-        : null,
     };
-    console.error(this._formatMessage("ERROR", message, errorData));
+
+    if (error) {
+      errorData.error = {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      };
+    }
+
+    if (this.logtail) {
+      this.logtail.error(message, errorData);
+    } else {
+      console.error(`[ERROR] [${this.context}] ${message}`, errorData);
+    }
   }
 
   debug(message, data = {}) {
     if (process.env.NODE_ENV === "development") {
-      console.log(this._formatMessage("DEBUG", message, data));
+      if (this.logtail) {
+        this.logtail.debug(message, {
+          context: this.context,
+          ...data,
+        });
+      } else {
+        console.log(`[DEBUG] [${this.context}] ${message}`, data);
+      }
     }
   }
 
@@ -103,6 +136,13 @@ class Logger {
       success,
       duration: duration ? `${duration}ms` : null,
     });
+  }
+
+  // Flush all logs to Logtail
+  async flush() {
+    if (this.logtail) {
+      await this.logtail.flush();
+    }
   }
 }
 

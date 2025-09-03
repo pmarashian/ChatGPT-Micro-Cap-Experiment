@@ -38,7 +38,8 @@ class PortfolioService {
       const params = {
         TableName: this.tableName,
         Key: {
-          id: ITEM_TYPES.PORTFOLIO,
+          PK: ITEM_TYPES.PORTFOLIO,
+          SK: "CURRENT",
         },
       };
 
@@ -89,6 +90,10 @@ class PortfolioService {
 
       // Recalculate totals
       portfolio = this.recalculatePortfolioTotals(portfolio);
+
+      // Sanitize portfolio data to prevent NaN values
+      portfolio = this.sanitizePortfolioData(portfolio);
+
       portfolio.lastUpdated = new Date().toISOString();
 
       // Save updated portfolio
@@ -122,18 +127,17 @@ class PortfolioService {
 
       const params = {
         TableName: this.tableName,
-        FilterExpression: "begins_with(id, :prefix) AND #date >= :cutoff",
-        ExpressionAttributeNames: {
-          "#date": "date",
-        },
+        IndexName: "TickerIndex",
+        KeyConditionExpression:
+          "begins_with(GSI1SK, :prefix) AND GSI1SK >= :cutoff",
         ExpressionAttributeValues: {
-          ":prefix": "trade#",
-          ":cutoff": cutoffIso,
+          ":prefix": "TRADE#",
+          ":cutoff": `TRADE#${cutoffIso}`,
         },
         ScanIndexForward: false, // Most recent first
       };
 
-      const result = await this.dynamodb.scan(params).promise();
+      const result = await this.dynamodb.query(params).promise();
 
       const trades = result.Items.map((item) => ({
         id: item.id,
@@ -165,7 +169,12 @@ class PortfolioService {
       const params = {
         TableName: this.tableName,
         Item: {
+          // Primary Key (composite)
+          PK: ITEM_TYPES.PORTFOLIO,
+          SK: "CURRENT",
+          // Legacy id for backward compatibility
           id: ITEM_TYPES.PORTFOLIO,
+          // Data
           ...portfolio,
         },
       };
@@ -184,13 +193,20 @@ class PortfolioService {
    */
   async saveTrade(trade) {
     try {
-      const tradeId = `trade#${new Date()
-        .toISOString()
-        .slice(0, 10)}#${Date.now()}`;
+      const timestamp = new Date().toISOString();
+      const tradeId = `${Date.now()}`;
 
       const tradeItem = {
-        id: tradeId,
-        date: new Date().toISOString(),
+        // Primary Key (composite)
+        PK: `TRADE#${trade.ticker}`,
+        SK: timestamp,
+        // GSI for ticker queries
+        GSI1PK: trade.ticker,
+        GSI1SK: `TRADE#${timestamp}`,
+        // Legacy id for backward compatibility
+        id: `trade#${timestamp.slice(0, 10)}#${tradeId}`,
+        // Data
+        date: timestamp,
         ticker: trade.ticker,
         action: trade.action,
         shares: trade.shares,
@@ -271,7 +287,11 @@ class PortfolioService {
       }
 
       const revenue = filledPrice * shares;
-      const costBasisSold = (shares / position.shares) * position.costBasis;
+      // Prevent division by zero
+      const costBasisSold =
+        position.shares > 0
+          ? (shares / position.shares) * (position.costBasis || 0)
+          : 0;
       const pnl = revenue - costBasisSold;
 
       // Update position
@@ -283,8 +303,11 @@ class PortfolioService {
       } else {
         // Partial sell
         const remainingShares = position.shares - shares;
+        // Prevent division by zero
         const remainingCost =
-          (remainingShares / position.shares) * position.costBasis;
+          position.shares > 0
+            ? (remainingShares / position.shares) * (position.costBasis || 0)
+            : 0;
         position.shares = remainingShares;
         position.costBasis = remainingCost;
         position.marketValue = remainingShares * filledPrice;
@@ -312,19 +335,75 @@ class PortfolioService {
 
     portfolio.positions.forEach((position) => {
       // Update market value based on current price (would be updated by market data service)
-      if (position.currentPrice) {
+      if (position.currentPrice && position.shares) {
         position.marketValue = position.shares * position.currentPrice;
-        position.unrealizedPnL = position.marketValue - position.costBasis;
-        position.unrealizedPnLPercent =
-          (position.unrealizedPnL / position.costBasis) * 100;
+        position.unrealizedPnL =
+          position.marketValue - (position.costBasis || 0);
+        if (position.costBasis && position.costBasis > 0) {
+          position.unrealizedPnLPercent =
+            (position.unrealizedPnL / position.costBasis) * 100;
+        } else {
+          position.unrealizedPnLPercent = 0;
+        }
+      } else {
+        position.marketValue = 0;
+        position.unrealizedPnL = 0;
+        position.unrealizedPnLPercent = 0;
       }
       totalValue += position.marketValue || 0;
     });
 
-    portfolio.totalValue = totalValue + portfolio.cash;
+    portfolio.totalValue = totalValue + (portfolio.cash || 0);
     portfolio.equity = totalValue;
 
     return portfolio;
+  }
+
+  /**
+   * Sanitize portfolio data to prevent NaN values
+   * @param {Object} portfolio - Portfolio to sanitize
+   * @returns {Object} Sanitized portfolio
+   */
+  sanitizePortfolioData(portfolio) {
+    // Sanitize main portfolio fields
+    portfolio.totalValue = this.sanitizeNumber(portfolio.totalValue, 0);
+    portfolio.cash = this.sanitizeNumber(portfolio.cash, 0);
+    portfolio.equity = this.sanitizeNumber(portfolio.equity, 0);
+
+    // Sanitize positions
+    if (Array.isArray(portfolio.positions)) {
+      portfolio.positions = portfolio.positions.map((position) => ({
+        ticker: position.ticker || "",
+        shares: this.sanitizeNumber(position.shares, 0),
+        buyPrice: this.sanitizeNumber(position.buyPrice, 0),
+        costBasis: this.sanitizeNumber(position.costBasis, 0),
+        stopLoss: this.sanitizeNumber(position.stopLoss, null),
+        currentPrice: this.sanitizeNumber(position.currentPrice, null),
+        marketValue: this.sanitizeNumber(position.marketValue, 0),
+        unrealizedPnL: this.sanitizeNumber(position.unrealizedPnL, 0),
+        unrealizedPnLPercent: this.sanitizeNumber(
+          position.unrealizedPnLPercent,
+          0
+        ),
+      }));
+    } else {
+      portfolio.positions = [];
+    }
+
+    return portfolio;
+  }
+
+  /**
+   * Sanitize a number value to prevent NaN
+   * @param {any} value - Value to sanitize
+   * @param {any} defaultValue - Default value if invalid
+   * @returns {any} Sanitized value
+   */
+  sanitizeNumber(value, defaultValue = 0) {
+    if (typeof value === "number" && !isNaN(value) && isFinite(value)) {
+      return value;
+    }
+    return defaultValue;
   }
 
   /**

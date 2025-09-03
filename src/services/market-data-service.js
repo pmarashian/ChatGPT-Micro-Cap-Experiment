@@ -8,12 +8,46 @@ const yahooFinance = require("yahoo-finance2").default;
 const axios = require("axios");
 const Logger = require("../utils/logger");
 const ErrorHandler = require("../utils/error-handler");
+const AIMemoryService = require("./ai-memory-service");
 
 class MarketDataService {
   constructor() {
     this.logger = new Logger("market-data-service");
     this.errorHandler = new ErrorHandler("market-data-service");
     this.stooqBaseUrl = "https://stooq.com/q/d/l/";
+    this.aiMemoryService = new AIMemoryService();
+  }
+
+  /**
+   * Get discovered tickers from AI memory
+   * @returns {Promise<Array>} Array of discovered ticker symbols
+   */
+  async getDiscoveredTickers() {
+    try {
+      const recentResearch = await this.aiMemoryService.getRecentResearch(10);
+      const discoveredTickers = new Set();
+
+      // Extract tickers from research discoveries
+      recentResearch.forEach((research) => {
+        if (research.newDiscoveries && Array.isArray(research.newDiscoveries)) {
+          research.newDiscoveries.forEach((discovery) => {
+            if (discovery.ticker && typeof discovery.ticker === "string") {
+              discoveredTickers.add(discovery.ticker.toUpperCase());
+            }
+          });
+        }
+      });
+
+      const tickerArray = Array.from(discoveredTickers);
+      this.logger.debug(
+        `Retrieved ${tickerArray.length} discovered tickers from AI memory`
+      );
+
+      return tickerArray;
+    } catch (error) {
+      this.logger.warn("Failed to retrieve discovered tickers", error.message);
+      return [];
+    }
   }
 
   /**
@@ -29,7 +63,13 @@ class MarketDataService {
       // Try Yahoo Finance first
       const yahooResult = await this.fetchYahooData(ticker, period);
       if (yahooResult && yahooResult.data && yahooResult.data.length > 0) {
-        this.logger.debug(`Successfully fetched ${ticker} from Yahoo Finance`);
+        const latestPrice =
+          yahooResult.data[yahooResult.data.length - 1]?.close;
+        this.logger.debug(`Successfully fetched ${ticker} from Yahoo Finance`, {
+          latestPrice,
+          dataPoints: yahooResult.data.length,
+          lastUpdated: yahooResult.data[yahooResult.data.length - 1]?.date,
+        });
         return {
           source: "yahoo",
           data: yahooResult.data,
@@ -41,7 +81,12 @@ class MarketDataService {
       this.logger.debug(`Yahoo Finance failed for ${ticker}, trying Stooq`);
       const stooqResult = await this.fetchStooqData(ticker, period);
       if (stooqResult && stooqResult.data && stooqResult.data.length > 0) {
-        this.logger.debug(`Successfully fetched ${ticker} from Stooq`);
+        const latestPrice =
+          stooqResult.data[stooqResult.data.length - 1]?.close;
+        this.logger.debug(`Successfully fetched ${ticker} from Stooq`, {
+          latestPrice,
+          dataPoints: stooqResult.data.length,
+        });
         return {
           source: "stooq",
           data: stooqResult.data,
@@ -75,10 +120,63 @@ class MarketDataService {
       tickers.push(...portfolio.positions.map((pos) => pos.ticker));
     }
 
-    // Add benchmark tickers
-    tickers.push(...["SPY", "IWO", "XBI", "IWM"]);
+    // Add benchmark and micro-cap biotech tickers
+    const baseTickers = [
+      // Benchmarks
+      "SPY",
+      "IWO",
+      "XBI",
+      "IWM",
+      // Micro-cap biotech stocks (examples - AI can research more)
+      "OCUP",
+      "BPTH",
+      "BXRX",
+      "PDSB",
+      "VTVT",
+      "INMB",
+      "CDTX",
+      "MBRX",
+      "SNGX",
+      "TNXP",
+    ];
 
-    this.logger.info(`Fetching market data for ${tickers.length} tickers`);
+    tickers.push(...baseTickers);
+
+    // Add AI-discovered tickers from recent research
+    try {
+      const discoveredTickers = await this.getDiscoveredTickers();
+      if (discoveredTickers.length > 0) {
+        // Filter out duplicates and add new discoveries
+        const newTickers = discoveredTickers.filter(
+          (ticker) => !tickers.includes(ticker)
+        );
+        if (newTickers.length > 0) {
+          tickers.push(...newTickers);
+          this.logger.info(
+            `Added ${newTickers.length} AI-discovered tickers to market data fetch`,
+            {
+              newTickers,
+              totalTickers: tickers.length,
+            }
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        "Failed to add discovered tickers to market data fetch",
+        error.message
+      );
+      // Continue with base tickers if discovery fails
+    }
+
+    this.logger.info(`Fetching market data for ${tickers.length} tickers`, {
+      baseTickers: baseTickers.length,
+      portfolioTickers: portfolio.positions?.length || 0,
+      discoveredTickers:
+        tickers.length -
+        baseTickers.length -
+        (portfolio.positions?.length || 0),
+    });
 
     // Fetch data for all tickers concurrently
     const promises = tickers.map((ticker) => this.getStockData(ticker, "1d"));

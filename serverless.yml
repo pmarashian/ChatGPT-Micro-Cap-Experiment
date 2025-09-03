@@ -2,6 +2,7 @@ service: chatgpt-trading-phase1
 
 plugins:
   - serverless-dotenv-plugin
+  - serverless-offline
 
 custom:
   dotenv:
@@ -18,6 +19,11 @@ custom:
       - ADMIN_EMAIL
       - EXECUTE_TRADES
       - STARTING_CASH
+      - LOGTAIL_SOURCE_TOKEN
+      - LOGTAIL_ENDPOINT
+  serverless-offline:
+    httpPort: 3001
+    lambdaPort: 3002
 
 provider:
   name: aws
@@ -60,15 +66,28 @@ provider:
     ADMIN_EMAIL: ${file(.env.${opt:stage, 'dev'}.json):ADMIN_EMAIL}
     EXECUTE_TRADES: ${file(.env.${opt:stage, 'dev'}.json):EXECUTE_TRADES}
     STARTING_CASH: ${file(.env.${opt:stage, 'dev'}.json):STARTING_CASH}
+    LOGTAIL_SOURCE_TOKEN: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_SOURCE_TOKEN}
+    LOGTAIL_ENDPOINT: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_ENDPOINT}
     SERVICE_NAME: ${self:service}
     STAGE: ${opt:stage, self:provider.stage}
 
 functions:
-  # Scheduled Functions
+  # Scheduled Functions - Optimized Pipeline
+  marketResearch:
+    handler: src/handlers/scheduled/market-research.handler
+    timeout: 600 # 10 minutes for deep research
+    events:
+      - schedule: cron(0 11 * * ? *) # 6 AM ET (11 AM UTC) - Pre-market research
+      - schedule: cron(0 22 * * ? *) # 5 PM ET (10 PM UTC) - Post-market research
+    environment:
+      AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
+      AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
+
   dailyTrading:
     handler: src/handlers/scheduled/daily-trading.handler
+    timeout: 180 # 3 minutes for trading decisions
     events:
-      - schedule: rate(1 day) # Daily at 4 PM ET approximation
+      - schedule: cron(0 21 * * ? *) # 4 PM ET (9 PM UTC) - Market close timing
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
@@ -76,17 +95,32 @@ functions:
   portfolioUpdate:
     handler: src/handlers/scheduled/portfolio-update.handler
     events:
-      - schedule: rate(1 day) # Daily portfolio update
+      - schedule: cron(0 21 * * ? *) # 4:30 PM ET (9:30 PM UTC) - After market close
 
   stopLoss:
     handler: src/handlers/scheduled/stop-loss.handler
     events:
-      - schedule: rate(15 minutes) # Every 15 min
+      - schedule: cron(0 14 * * ? *) # 10 AM ET (2 PM UTC) - After market open
+      - schedule: cron(0 17 * * ? *) # 1 PM ET (5 PM UTC) - Mid-day check
+      - schedule: cron(0 20 * * ? *) # 4 PM ET (8 PM UTC) - Market close
+    environment:
+      AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
+      AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
   emailReport:
     handler: src/handlers/scheduled/email-report.handler
     events:
-      - schedule: rate(1 day) # Daily email report
+      - schedule: cron(0 21 * * ? *) # 4:30 PM ET (9:30 PM UTC) - End of day report
+
+  orderMonitor:
+    handler: src/handlers/scheduled/order-monitor.handler
+    timeout: 120 # 2 minutes for order monitoring
+    events:
+      - schedule: cron(0 15 * * ? *) # 11 AM ET (3 PM UTC) - Mid-morning check
+      - schedule: cron(0 19 * * ? *) # 2 PM ET (7 PM UTC) - Mid-afternoon check
+    environment:
+      AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
+      AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
   # REST API Endpoints
   getPortfolio:
@@ -123,6 +157,7 @@ functions:
 
   getSystemStatus:
     handler: src/handlers/api/get-system-status.handler
+    timeout: 30
     events:
       - http:
           path: /api/status
@@ -131,9 +166,108 @@ functions:
 
   triggerDailyTrading:
     handler: src/handlers/api/trigger-daily-trading.handler
+    timeout: 180 # 3 minutes for trading decisions
     events:
       - http:
           path: /api/trigger-daily-trading
+          method: post
+          cors: true
+
+  getOpenAIModels:
+    handler: src/handlers/api/get-openai-models.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/openai-models
+          method: get
+          cors: true
+
+  resetSystem:
+    handler: src/handlers/api/reset-system.handler
+    timeout: 60
+    events:
+      - http:
+          path: /api/reset-system
+          method: post
+          cors: true
+
+  testBrokerage:
+    handler: src/handlers/api/test-brokerage.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/test-brokerage
+          method: post
+          cors: true
+
+  testTrading:
+    handler: src/handlers/api/test-trading.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/test-trading
+          method: post
+          cors: true
+
+  testMarketData:
+    handler: src/handlers/api/test-market-data.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/test-market-data
+          method: get
+          cors: true
+
+  getAIMemory:
+    handler: src/handlers/api/get-ai-memory.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/ai-memory
+          method: get
+          cors: true
+
+  getDiscoveryQuality:
+    handler: src/handlers/api/get-discovery-quality.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/discovery-quality
+          method: get
+          cors: true
+
+  getTickerHistory:
+    handler: src/handlers/api/get-ticker-history.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/ticker-history
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                ticker: true
+
+  testEmail:
+    handler: src/handlers/api/test-email.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/test-email
+          method: post
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                recipient: false
+
+  triggerMarketResearch:
+    handler: src/handlers/api/trigger-market-research.handler
+    timeout: 600 # 10 minutes for deep research
+    events:
+      - http:
+          path: /api/trigger-market-research
           method: post
           cors: true
 
@@ -145,8 +279,27 @@ resources:
         TableName: ${self:service}-${opt:stage, self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
-          - AttributeName: id
+          # Primary Key attributes
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+          # GSI attributes for ticker queries
+          - AttributeName: GSI1PK
+            AttributeType: S
+          - AttributeName: GSI1SK
             AttributeType: S
         KeySchema:
-          - AttributeName: id
+          - AttributeName: PK
             KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: TickerIndex
+            KeySchema:
+              - AttributeName: GSI1PK
+                KeyType: HASH
+              - AttributeName: GSI1SK
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL

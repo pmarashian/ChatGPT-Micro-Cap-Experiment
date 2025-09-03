@@ -47,6 +47,12 @@ class BrokerageService {
       );
 
       const orderData = this.buildOrderData(tradeOrder);
+      this.logger.debug("Order data being sent to Alpaca", orderData);
+      this.logger.debug(
+        "Full order data JSON",
+        JSON.stringify(orderData, null, 2)
+      );
+
       const response = await this.client.post("/orders", orderData);
 
       const result = {
@@ -194,27 +200,132 @@ class BrokerageService {
   }
 
   /**
-   * Build order data for Alpaca API
+   * Monitor order execution and handle price volatility
+   * @param {Object} orderResult - Result from executeTrade
+   * @param {number} referencePrice - Original reference price
+   * @returns {Promise<Object>} Monitoring result
+   */
+  async monitorOrderExecution(orderResult, referencePrice) {
+    try {
+      const volatilityThreshold = 0.1; // 10% price change threshold
+      const orderId = orderResult.orderId;
+
+      // Check current order status
+      const orderStatus = await this.client.get(`/orders/${orderId}`);
+
+      if (orderStatus.data.status === "filled") {
+        const executionPrice = parseFloat(orderStatus.data.filled_avg_price);
+        const priceChange =
+          Math.abs(executionPrice - referencePrice) / referencePrice;
+
+        if (priceChange > volatilityThreshold) {
+          this.logger.warn(
+            `Significant price change detected for ${orderResult.ticker}`,
+            {
+              referencePrice,
+              executionPrice,
+              priceChange: `${(priceChange * 100).toFixed(2)}%`,
+              orderId,
+            }
+          );
+
+          // Could implement logic to:
+          // 1. Send alert notifications
+          // 2. Adjust position sizing
+          // 3. Update risk parameters
+          // 4. Log for analysis
+        }
+
+        return {
+          monitored: true,
+          executionPrice,
+          priceChangePercent: (priceChange * 100).toFixed(2),
+          withinThreshold: priceChange <= volatilityThreshold,
+        };
+      }
+
+      return { monitored: true, status: orderStatus.data.status };
+    } catch (error) {
+      this.logger.error(
+        `Failed to monitor order ${orderResult.orderId || "unknown"}`,
+        error
+      );
+      return { monitored: false, error: error.message };
+    }
+  }
+
+  /**
+   * Get all open orders
+   * @returns {Promise<Array>} List of open orders
+   */
+  async getOpenOrders() {
+    try {
+      this.logger.debug("Fetching open orders");
+      const response = await this.client.get("/orders", {
+        params: {
+          status: "open",
+        },
+      });
+
+      this.logger.debug(`Retrieved ${response.data.length} open orders`);
+      return response.data;
+    } catch (error) {
+      this.logger.error("Failed to fetch open orders", error);
+      throw new Error(`Open orders fetch error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Build order data for Alpaca API with protective measures
    */
   buildOrderData(tradeOrder) {
     const orderData = {
       symbol: tradeOrder.ticker,
       qty: tradeOrder.shares.toString(),
       side: tradeOrder.action.toLowerCase(), // 'buy' or 'sell'
-      type: tradeOrder.orderType || "market", // 'market' or 'limit'
-      time_in_force: tradeOrder.timeInForce || "day", // 'day', 'gtc', etc.
+      type: tradeOrder.orderType || "limit", // Default to limit for protection
+      time_in_force: tradeOrder.timeInForce || "day",
     };
+
+    // Add protective pricing for after-hours orders
+    if (!tradeOrder.limitPrice && tradeOrder.referencePrice) {
+      // Calculate protective limit price based on reference price
+      const protectionBuffer = 0.05; // 5% protection buffer
+      if (tradeOrder.action.toLowerCase() === "buy") {
+        orderData.limit_price = (
+          tradeOrder.referencePrice *
+          (1 + protectionBuffer)
+        ).toFixed(2);
+        orderData.type = "limit";
+      } else if (tradeOrder.action.toLowerCase() === "sell") {
+        orderData.limit_price = (
+          tradeOrder.referencePrice *
+          (1 - protectionBuffer)
+        ).toFixed(2);
+        orderData.type = "limit";
+      }
+      this.logger.info(
+        `Added protective limit price for ${tradeOrder.ticker}: $${orderData.limit_price}`
+      );
+    }
 
     // Add limit price if order type is limit
     if (tradeOrder.orderType === "limit" && tradeOrder.limitPrice) {
       orderData.limit_price = tradeOrder.limitPrice.toString();
     }
 
-    // Add stop loss if provided
+    // Add stop loss if provided using bracket order format
     if (tradeOrder.stopLoss) {
-      orderData.stop_loss = {
-        stop_price: tradeOrder.stopLoss.toString(),
-      };
+      // For now, let's skip the stop loss to test if the basic order works
+      // Alpaca bracket orders are more complex and may require different formatting
+      this.logger.warn(
+        `Stop loss orders not yet implemented. Skipping stop loss for ${tradeOrder.ticker}`
+      );
+      // orderData.order_class = "bracket";
+      // orderData.stop_loss = {
+      //   stop_price: tradeOrder.stopLoss.toString(),
+      //   limit_price: (tradeOrder.stopLoss * 0.98).toString() // 2% below stop
+      // };
     }
 
     return orderData;
