@@ -39,6 +39,61 @@ npm run env:to-env
 
 **Workflow:** Edit `.env.dev.json` (JSON format) and run `npm run env:sync` to update `.env.dev`.
 
+## Logging System
+
+The project uses a proxy-based batching logger that sends logs to **Logtail** via HTTP POST requests:
+
+### Features
+
+- **Batched HTTP POST**: Logs are batched and sent to Logtail in groups of 10
+- **Automatic flushing**: Logs flush every 5 seconds or when batch size is reached
+- **Graceful fallback**: Falls back to console logging if Logtail is not configured
+- **Context support**: Each logger instance can have its own context
+- **Retry mechanism**: Failed log sends are retried up to 3 times
+
+### Usage
+
+```javascript
+const Logger = require("./src/utils/logger");
+
+// Default logger (context: "system")
+Logger.info("User logged in", { userId: 123, action: "login" });
+Logger.error("Database connection failed", error, { dbName: "trading" });
+
+// Context-specific logger
+const apiLogger = Logger.create("api-service");
+apiLogger.warn("Rate limit approaching", { remaining: 5 });
+
+// Business logic methods
+Logger.logTradeDecision({
+  ticker: "AAPL",
+  action: "BUY",
+  shares: 100,
+  reasoning: "Strong momentum",
+  confidence: 0.85,
+});
+
+// Manual flush (optional)
+await Logger.flush();
+```
+
+### Configuration
+
+Set these environment variables to enable Logtail logging:
+
+```bash
+LOGTAIL_SOURCE_TOKEN=your_source_token_here
+LOGTAIL_ENDPOINT=https://your-endpoint.betterstackdata.com
+```
+
+### Testing
+
+Test the logger with the built-in test script:
+
+```bash
+npm run test-logger
+```
+
 # The Concept
 
 Every day, I kept seeing the same ad about having some A.I. pick undervalued stocks. It was obvious it was trying to get me to subscribe to some garbage, so I just rolled my eyes.  

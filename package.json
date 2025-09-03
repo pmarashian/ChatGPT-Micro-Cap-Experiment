@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node test-system.js",
     "test-email": "node test-email.js",
+    "test-logger": "node test-logger.js",
     "backtest-day": "ts-node src/lib/backtesting/backtest-trigger.ts --date",
     "backtest-sequence": "ts-node src/lib/backtesting/backtest-trigger.ts --sequence",
     "download-historical-data": "ts-node src/lib/backtesting/data-downloader.ts",
