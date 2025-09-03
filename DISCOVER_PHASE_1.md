@@ -11,6 +11,17 @@
 - Research prompts grounded by retrieved evidence with mandatory citations.
 - Evidence and research outputs persisted with provenance.
 
+## Decisions Summary (v1)
+
+- **Providers**: FMP for universe, fundamentals, and news (v1 only); Yahoo Finance for symbol validation and ADV approximation; Yahoo/Stooq remain for market prices.
+- **Rate limit & batching**: Target ≤ 250 RPM (FMP cap 300 RPM). Batch size 25, concurrency 4, exponential backoff 1s→2s→4s→8s with jitter, max 3 retries; skip failed batches and continue.
+- **Universe filters**: Sector keywords ["biotechnology", "biotech", "biopharma", "pharmaceuticals", "drug manufacturers", "drug manufacturers—specialty & generic"]; market cap $50M–$500M; price ≥ $1.00; ADV ≥ $200k (Yahoo 20d avg vol × latest close; if unavailable, skip ADV filter); exchanges = NASDAQ/NYSE/NYSE American; exclude OTC/ADR; dedupe/validate via Yahoo; universe snapshot TTL 14d.
+- **Scheduling (UTC)**: Universe 03:00; Ingestion (fundamentals + news) 00:00, 06:00, 12:00, 18:00; Research 01:00 and 13:00 (runs after ingestion for freshness).
+- **Evidence & citations**: Persist fundamentals/news with provenance; store structured fields plus trimmed `raw` to stay well under 400KB; evidence TTL 30d; evidence bundle = latest fundamentals (≤7d) + ≤5 news (≤24h); research requires per-company citations; retry once on citation/schema failure; drop ticker if still invalid.
+- **DynamoDB & keys**: Use composite keys `PK`/`SK` and `TickerIndex` (`GSI1PK`/`GSI1SK`) for all reads/writes; remove legacy `id` queries; enable table TTL on attribute `ttl` via CloudFormation.
+- **Diagnostics endpoints**: `GET /api/universe-latest`, `GET /api/evidence?ticker=ABEO&limit=10`.
+- **Environment**: Require `FMP_API_KEY`; optional tunables `UNIVERSE_*`, `NEWS_MAX_ITEMS_PER_TICKER`, `DISCOVERY_MAX_CONCURRENCY`.
+
 ---
 
 ## Implementation Steps
