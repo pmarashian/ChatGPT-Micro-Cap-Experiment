@@ -66,7 +66,7 @@ module.exports.handler = async (event, context) => {
     );
 
     // Call AI for research-only response
-    const researchResponse = await aiService.callOpenAI(researchPrompt);
+    const researchResponse = await aiService.callOpenAI(researchPrompt, true); // true for research
 
     // Parse research response (different format than trading decisions)
     const parsedResearch = aiService.parseResearchResponse(researchResponse);
@@ -137,6 +137,9 @@ module.exports.handler = async (event, context) => {
     // Log function end
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
 
+    // Force flush all remaining logs before returning
+    await logger.flush();
+
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -154,6 +157,13 @@ module.exports.handler = async (event, context) => {
 
     // Log function end with error
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
+
+    // Force flush all remaining logs before throwing error
+    try {
+      await logger.flush();
+    } catch (flushError) {
+      // Silent fail - don't let flush errors mask the original error
+    }
 
     throw error;
   }

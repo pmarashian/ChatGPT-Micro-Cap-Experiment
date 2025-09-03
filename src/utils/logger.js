@@ -8,6 +8,7 @@ let logQueue = [];
 let flushTimeout = null;
 const BATCH_SIZE = 10;
 const FLUSH_INTERVAL = 100; // ms
+const MAX_QUEUE_SIZE = 1000; // Prevent memory issues
 
 // Determine logging endpoint based on environment
 let loggingEndpoint = process.env.LOGGING_ENDPOINT;
@@ -190,8 +191,11 @@ function createLogger(context = "system") {
           // Add to queue
           logQueue.push(logEntry);
 
-          // Flush immediately if batch size reached, otherwise schedule flush
-          if (logQueue.length >= BATCH_SIZE) {
+          // Flush immediately if batch size reached or queue getting too large, otherwise schedule flush
+          if (
+            logQueue.length >= BATCH_SIZE ||
+            logQueue.length >= MAX_QUEUE_SIZE
+          ) {
             if (flushTimeout) {
               clearTimeout(flushTimeout);
               flushTimeout = null;
