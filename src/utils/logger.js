@@ -1,132 +1,133 @@
 /**
  * Centralized logging utility for consistent logging across the system
- * Supports Logtail integration with batched HTTP POST requests
+ * Uses manual HTTP POST to send logs to configured endpoint
  */
 
-const axios = require("axios");
-
-const sourceToken = process.env.LOGTAIL_SOURCE_TOKEN;
-const endpoint = process.env.LOGTAIL_ENDPOINT;
-
-// Configuration
-const BATCH_SIZE = 10; // Send logs when queue reaches this size
-const FLUSH_INTERVAL = 5000; // Send logs every 5 seconds if not empty
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000;
-
-// Log queue and management
+// Log batching setup
 let logQueue = [];
 let flushTimeout = null;
-let isFlushing = false;
+const BATCH_SIZE = 10;
+const FLUSH_INTERVAL = 100; // ms
 
-// Send batch of logs to Logtail via HTTP POST
-async function sendLogsToLogtail(logs) {
-  if (!sourceToken || !endpoint || logs.length === 0) {
-    return;
-  }
+// Determine logging endpoint based on environment
+let loggingEndpoint = process.env.LOGGING_ENDPOINT;
+const loggingTimeout = Number(process.env.LOGGING_TIMEOUT_MS || 5000); // Increased default timeout
 
-  const url = `${endpoint}/logs/bulk`;
+// Detect offline mode more reliably
+const isOffline =
+  process.env.IS_OFFLINE === "true" ||
+  process.env.SERVERLESS_OFFLINE_HTTP_PORT ||
+  !process.env.AWS_LAMBDA_FUNCTION_NAME;
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const response = await axios.post(url, logs, {
-        headers: {
-          Authorization: `Bearer ${sourceToken}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 10000, // 10 second timeout
-      });
-
-      if (response.status === 200) {
-        return; // Success
-      }
-    } catch (error) {
-      console.error(
-        `Logtail send attempt ${attempt + 1} failed:`,
-        error.message
-      );
-
-      if (attempt < MAX_RETRIES - 1) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, RETRY_DELAY * (attempt + 1))
-        );
-      }
-    }
-  }
-
-  // If all retries failed, log to console as fallback
-  console.error("Failed to send logs to Logtail after all retries:", logs);
+// For offline development, use serverless-offline endpoint
+if (isOffline) {
+  const port = process.env.SERVERLESS_OFFLINE_HTTP_PORT || 3000; // Updated to match serverless.yml
+  const stage = process.env.STAGE || "dev";
+  loggingEndpoint = `http://localhost:${port}/${stage}/api/logs`;
 }
 
-// Flush logs to Logtail
-async function flushLogs() {
-  if (isFlushing || logQueue.length === 0) {
-    return;
-  }
+// For AWS deployment, construct API Gateway URL
+if (!loggingEndpoint && !isOffline) {
+  const serviceName = process.env.SERVICE_NAME || "chatgpt-trading-phase1";
+  const stage = process.env.STAGE || "dev";
+  const region = process.env.AWS_REGION || "us-east-1";
 
-  isFlushing = true;
+  // This will be the API Gateway URL pattern
+  loggingEndpoint = `https://${serviceName}-${stage}.execute-api.${region}.amazonaws.com/${stage}/api/logs`;
+}
+
+// Flush logs to endpoint
+async function flushLogs() {
+  if (logQueue.length === 0) return;
+
   const logsToSend = [...logQueue];
-  logQueue = []; // Clear queue immediately
+  logQueue = [];
 
   try {
-    await sendLogsToLogtail(logsToSend);
+    if (!loggingEndpoint) {
+      // Fallback to console if no endpoint configured
+      logsToSend.forEach((log) =>
+        console.log(`[${log.level.toUpperCase()}]`, log.message, log)
+      );
+      return;
+    }
+
+    // Apply timeout so we never block request completion on logging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), loggingTimeout);
+
+    try {
+      const response = await fetch(loggingEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logs: logsToSend }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
   } catch (error) {
-    console.error("Error flushing logs to Logtail:", error);
-    // Re-add failed logs back to queue
-    logQueue.unshift(...logsToSend);
-  } finally {
-    isFlushing = false;
+    // Silent fail - log to console as fallback
+    console.warn(
+      `Logger: Failed to send logs (${error.message}), falling back to console`
+    );
+    logsToSend.forEach((log) =>
+      console.log(`[${log.level.toUpperCase()}]`, log.message, log)
+    );
   }
 }
 
-// Schedule a flush operation
+// Schedule log flushing
 function scheduleFlush() {
-  if (flushTimeout) {
-    clearTimeout(flushTimeout);
-  }
+  if (flushTimeout) return;
 
-  flushTimeout = setTimeout(async () => {
-    await flushLogs();
+  flushTimeout = setTimeout(() => {
+    flushTimeout = null;
+    flushLogs();
   }, FLUSH_INTERVAL);
 }
 
-// Create logger factory function that returns a proxy
-function createLogger(context = "system") {
-  let loggerInstance = null;
+// Force flush remaining logs
+async function forceFlushLogs() {
+  if (flushTimeout) {
+    clearTimeout(flushTimeout);
+    flushTimeout = null;
+  }
+  await flushLogs();
+}
 
-  const proxy = new Proxy(
+// Create logger factory function
+function createLogger(context = "system") {
+  return new Proxy(
     {
       // Expose flush method for manual flushing
       async flush() {
-        if (flushTimeout) {
-          clearTimeout(flushTimeout);
-          flushTimeout = null;
-        }
-        await flushLogs();
+        await forceFlushLogs();
       },
 
       // Lambda-specific logging methods
-      logLambdaStart(event, context) {
-        loggerInstance.info("Lambda function started", {
-          requestId: context.awsRequestId,
-          functionName: context.functionName,
+      logLambdaStart(event, awsContext) {
+        this.info("Lambda function started", {
+          requestId: awsContext.awsRequestId,
+          functionName: awsContext.functionName,
           event: JSON.stringify(event),
         });
       },
 
       logLambdaEnd(duration, success = true) {
-        loggerInstance.info(
-          `Lambda function ${success ? "completed" : "failed"}`,
-          {
-            duration: `${duration}ms`,
-            success,
-          }
-        );
+        this.info(`Lambda function ${success ? "completed" : "failed"}`, {
+          duration: `${duration}ms`,
+          success,
+        });
       },
 
       // Business logic logging methods
       logTradeDecision(decision) {
-        loggerInstance.info("AI trade decision made", {
+        this.info("AI trade decision made", {
           ticker: decision.ticker,
           action: decision.action,
           shares: decision.shares,
@@ -136,7 +137,7 @@ function createLogger(context = "system") {
       },
 
       logTradeExecution(orderId, trade, success = true) {
-        loggerInstance.info(`Trade ${success ? "executed" : "failed"}`, {
+        this.info(`Trade ${success ? "executed" : "failed"}`, {
           orderId,
           ticker: trade.ticker,
           action: trade.action,
@@ -147,7 +148,7 @@ function createLogger(context = "system") {
       },
 
       logPortfolioUpdate(portfolio) {
-        loggerInstance.info("Portfolio updated", {
+        this.info("Portfolio updated", {
           totalValue: portfolio.totalValue,
           cash: portfolio.cash,
           positionCount: portfolio.positions?.length || 0,
@@ -156,7 +157,7 @@ function createLogger(context = "system") {
       },
 
       logApiCall(service, method, success = true, duration = null) {
-        loggerInstance.info(`API call ${success ? "successful" : "failed"}`, {
+        this.info(`API call ${success ? "successful" : "failed"}`, {
           service,
           method,
           success,
@@ -177,10 +178,10 @@ function createLogger(context = "system") {
           const additionalData =
             customFields.length > 0 ? Object.assign({}, ...customFields) : {};
 
-          // Create log entry with preserved timestamp
+          // Create log entry
           const logEntry = {
             dt: new Date().toISOString(),
-            level: prop.toUpperCase(),
+            level: prop,
             message,
             context,
             ...additionalData,
@@ -200,58 +201,111 @@ function createLogger(context = "system") {
             scheduleFlush();
           }
 
-          // Also log to console for local development/debugging
-          if (process.env.NODE_ENV === "development" || !sourceToken) {
+          // Always log to console for local development/debugging
+          if (process.env.NODE_ENV === "development" || !loggingEndpoint) {
             const consoleMethod =
               prop === "error" ? "error" : prop === "warn" ? "warn" : "log";
             console[consoleMethod](
               `[${prop.toUpperCase()}] [${context}] ${message}`,
-              additionalData
+              Object.keys(additionalData).length > 0 ? additionalData : ""
             );
           }
         };
       },
     }
   );
-
-  loggerInstance = proxy;
-  return proxy;
 }
 
-// Export both the factory function and a default logger instance
-const Logger = createLogger();
-Logger.create = createLogger;
+// Create backward-compatible Logger class/function hybrid
+function Logger(context = "system") {
+  // Support both new Logger() and Logger() patterns
+  if (new.target) {
+    return createLogger(context);
+  }
+  return createLogger(context);
+}
+
+// Add static methods for direct access
+Logger.info = function (message, data = {}) {
+  const logger = createLogger();
+  return logger.info(message, data);
+};
+
+Logger.warn = function (message, data = {}) {
+  const logger = createLogger();
+  return logger.warn(message, data);
+};
+
+Logger.error = function (message, data = {}) {
+  const logger = createLogger();
+  return logger.error(message, data);
+};
+
+Logger.debug = function (message, data = {}) {
+  const logger = createLogger();
+  return logger.debug(message, data);
+};
+
+// Business logic methods
+Logger.logTradeDecision = function (decision) {
+  const logger = createLogger();
+  return logger.logTradeDecision(decision);
+};
+
+Logger.logTradeExecution = function (orderId, trade, success = true) {
+  const logger = createLogger();
+  return logger.logTradeExecution(orderId, trade, success);
+};
+
+Logger.logPortfolioUpdate = function (portfolio) {
+  const logger = createLogger();
+  return logger.logPortfolioUpdate(portfolio);
+};
+
+Logger.logApiCall = function (
+  service,
+  method,
+  success = true,
+  duration = null
+) {
+  const logger = createLogger();
+  return logger.logApiCall(service, method, success, duration);
+};
+
+Logger.logLambdaStart = function (event, context) {
+  const logger = createLogger();
+  return logger.logLambdaStart(event, context);
+};
+
+Logger.logLambdaEnd = function (duration, success = true) {
+  const logger = createLogger();
+  return logger.logLambdaEnd(duration, success);
+};
+
+Logger.flush = async function () {
+  const logger = createLogger();
+  return logger.flush();
+};
+
+Logger.create = function (context = "system") {
+  return createLogger(context);
+};
 
 // Graceful shutdown - flush logs before exit
 process.on("beforeExit", async () => {
-  if (flushTimeout) {
-    clearTimeout(flushTimeout);
-  }
-  if (logQueue.length > 0) {
-    console.log(`Flushing ${logQueue.length} remaining logs before exit...`);
-    await flushLogs();
-  }
+  console.log("Flushing remaining logs before exit...");
+  await forceFlushLogs();
 });
 
 process.on("SIGINT", async () => {
-  if (flushTimeout) {
-    clearTimeout(flushTimeout);
-  }
-  if (logQueue.length > 0) {
-    console.log(`Flushing ${logQueue.length} remaining logs before exit...`);
-    await flushLogs();
-  }
+  console.log("Flushing remaining logs before exit...");
+  await forceFlushLogs();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
-  if (flushTimeout) {
-    clearTimeout(flushTimeout);
-  }
-  if (logQueue.length > 0) {
-    console.log(`Flushing ${logQueue.length} remaining logs before exit...`);
-    await flushLogs();
-  }
+  console.log("Flushing remaining logs before exit...");
+  await forceFlushLogs();
   process.exit(0);
 });
 

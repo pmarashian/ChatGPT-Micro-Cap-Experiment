@@ -21,8 +21,9 @@ custom:
       - STARTING_CASH
       - LOGTAIL_SOURCE_TOKEN
       - LOGTAIL_ENDPOINT
+      - LOGTAIL_API_KEY
   serverless-offline:
-    httpPort: 3001
+    httpPort: 3000
     lambdaPort: 3002
 
 provider:
@@ -54,6 +55,11 @@ provider:
             - logs:CreateLogStream
             - logs:PutLogEvents
           Resource: "*"
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource:
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-logProcessor"
   environment:
     AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
     AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
@@ -70,6 +76,7 @@ provider:
     LOGTAIL_ENDPOINT: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_ENDPOINT}
     SERVICE_NAME: ${self:service}
     STAGE: ${opt:stage, self:provider.stage}
+    IS_OFFLINE: ${env:IS_OFFLINE, 'false'}
 
 functions:
   # Scheduled Functions - Optimized Pipeline
@@ -270,6 +277,26 @@ functions:
           path: /api/trigger-market-research
           method: post
           cors: true
+
+  # Logging System
+  logReceiver:
+    handler: src/handlers/api/log-receiver.logReceiver
+    timeout: 30
+    events:
+      - http:
+          path: /api/logs
+          method: post
+          cors: true
+    environment:
+      LOGTAIL_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_API_KEY}
+      LOGTAIL_ENDPOINT: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_ENDPOINT}
+
+  logProcessor:
+    handler: src/handlers/scheduled/log-processor.logProcessor
+    timeout: 60
+    environment:
+      LOGTAIL_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_API_KEY}
+      LOGTAIL_ENDPOINT: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_ENDPOINT}
 
 resources:
   Resources:
