@@ -44,6 +44,9 @@ const PORTFOLIO_CONFIG = {
     MIN_PERCENT: 0.03, // 3% of portfolio per position
     DEFAULT_MAX_PERCENT: 0.12,
   },
+  UTILIZATION: {
+    TARGET_PERCENT: 1.0, // Target proportion of portfolio invested (e.g., 1.0 = 100%)
+  },
   RISK_MANAGEMENT: {
     STOP_LOSS_MIN: 0.2, // 20% below entry
     STOP_LOSS_MAX: 0.3, // 30% below entry
