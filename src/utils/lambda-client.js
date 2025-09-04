@@ -13,9 +13,10 @@ function createLambdaClient() {
   return new AWS.Lambda({
     apiVersion: "2015-03-31",
     region: process.env.AWS_REGION || "us-east-1",
-    endpoint: process.env.IS_OFFLINE
-      ? "http://localhost:3002" // serverless-offline Lambda port (matches serverless.yml)
-      : "https://lambda.us-east-1.amazonaws.com",
+    endpoint:
+      process.env.IS_OFFLINE === "true"
+        ? "http://localhost:3002" // serverless-offline Lambda port (matches serverless.yml)
+        : "https://lambda.us-east-1.amazonaws.com",
   });
 }
 

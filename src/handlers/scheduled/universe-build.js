@@ -8,6 +8,8 @@ const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
 
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
+
 let logger;
 let errorHandler;
 
@@ -15,7 +17,7 @@ let errorHandler;
  * Scheduled Lambda handler for universe build
  * Runs daily at 03:00 UTC
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("universe-build");
   errorHandler = new ErrorHandler("universe-build");
@@ -88,3 +90,8 @@ module.exports.handler = async (event, context) => {
     throw error;
   }
 };
+
+module.exports.handler = withScheduledLogFlushing(
+  baseHandler,
+  "universe-build"
+);

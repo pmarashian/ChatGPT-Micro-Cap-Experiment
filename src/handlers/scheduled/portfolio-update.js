@@ -9,6 +9,7 @@ const MarketDataService = require("../../services/market-data-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
 
 let logger;
 let errorHandler;
@@ -16,7 +17,7 @@ let errorHandler;
 /**
  * Lambda handler for portfolio updates
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("portfolio-update");
   errorHandler = new ErrorHandler("portfolio-update");
@@ -34,7 +35,7 @@ module.exports.handler = async (event, context) => {
     const portfolioService = new PortfolioService();
     const marketDataService = new MarketDataService();
 
-    // 1. Get current portfolio
+    // 1. Get current portfolio from dynamo
     logger.info("Fetching current portfolio");
     const portfolio = await portfolioService.getCurrentPortfolio();
 
@@ -55,6 +56,7 @@ module.exports.handler = async (event, context) => {
     logger.info(
       `Updating market data for ${portfolio.positions.length} positions`
     );
+
     const tickers = portfolio.positions.map((pos) => pos.ticker);
 
     const marketDataPromises = tickers.map((ticker) =>
@@ -140,3 +142,8 @@ module.exports.handler = async (event, context) => {
     throw error;
   }
 };
+
+module.exports.handler = withScheduledLogFlushing(
+  baseHandler,
+  "portfolio-update"
+);

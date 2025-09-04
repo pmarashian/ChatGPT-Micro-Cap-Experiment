@@ -9,6 +9,7 @@ const MarketDataService = require("../../services/market-data-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
 
 let logger;
 let errorHandler;
@@ -17,7 +18,7 @@ let errorHandler;
  * Scheduled Lambda handler for order monitoring
  * Checks pending orders and monitors for price volatility
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("order-monitor");
   errorHandler = new ErrorHandler("order-monitor");
@@ -189,3 +190,5 @@ module.exports.handler = async (event, context) => {
     throw error;
   }
 };
+
+module.exports.handler = withScheduledLogFlushing(baseHandler, "order-monitor");

@@ -1,7 +1,6 @@
 /**
  * Daily Trading Lambda Handler
  * Main orchestration function for automated trading cycle
- * Replicates the core logic from Python trading_script.py main() function
  */
 
 const AIService = require("../../services/ai-service");
@@ -11,6 +10,7 @@ const PortfolioService = require("../../services/portfolio-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
 
 let logger;
 let errorHandler;
@@ -22,7 +22,7 @@ let errorHandler;
 /**
  * Lambda handler for scheduled daily trading execution
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("daily-trading");
   errorHandler = new ErrorHandler("daily-trading");
@@ -102,9 +102,6 @@ module.exports.handler = async (event, context) => {
     // Log function end
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
 
-    // Force flush all remaining logs before returning
-    await logger.flush();
-
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -123,13 +120,6 @@ module.exports.handler = async (event, context) => {
 
     // Log function end with error
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
-
-    // Force flush all remaining logs before throwing error
-    try {
-      await logger.flush();
-    } catch (flushError) {
-      // Silent fail - don't let flush errors mask the original error
-    }
 
     throw error; // Let Lambda handle the error response
   }
@@ -244,3 +234,5 @@ async function executeTrades(decisions, brokerageService) {
 
   return results;
 }
+
+module.exports.handler = withScheduledLogFlushing(baseHandler, "daily-trading");

@@ -12,6 +12,7 @@ const {
   getEnvConfig,
 } = require("../../config/environment");
 const AWS = require("aws-sdk");
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
 
 let logger;
 let errorHandler;
@@ -19,7 +20,7 @@ let errorHandler;
 /**
  * Lambda handler for email report generation and delivery
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("email-report");
   errorHandler = new ErrorHandler("email-report");
@@ -230,3 +231,5 @@ async function sendEmailReport(ses, envConfig, emailContent, reportData) {
     throw new Error(`Email delivery failed: ${error.message}`);
   }
 }
+
+module.exports.handler = withScheduledLogFlushing(baseHandler, "email-report");

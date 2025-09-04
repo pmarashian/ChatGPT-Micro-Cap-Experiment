@@ -10,6 +10,7 @@ const MarketDataService = require("../../services/market-data-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
 
 let logger;
 let errorHandler;
@@ -18,7 +19,7 @@ let errorHandler;
  * Scheduled Lambda handler for market research
  * Runs every 12 hours to perform deep AI analysis
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("market-research");
   errorHandler = new ErrorHandler("market-research");
@@ -137,9 +138,6 @@ module.exports.handler = async (event, context) => {
     // Log function end
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
 
-    // Force flush all remaining logs before returning
-    await logger.flush();
-
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -168,3 +166,8 @@ module.exports.handler = async (event, context) => {
     throw error;
   }
 };
+
+module.exports.handler = withScheduledLogFlushing(
+  baseHandler,
+  "market-research"
+);

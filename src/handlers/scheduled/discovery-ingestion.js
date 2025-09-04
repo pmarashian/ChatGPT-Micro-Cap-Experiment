@@ -8,6 +8,8 @@ const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
 
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
+
 let logger;
 let errorHandler;
 
@@ -15,7 +17,7 @@ let errorHandler;
  * Scheduled Lambda handler for discovery ingestion
  * Runs every 6 hours at 00:00, 06:00, 12:00, 18:00 UTC
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("discovery-ingestion");
   errorHandler = new ErrorHandler("discovery-ingestion");
@@ -78,14 +80,10 @@ module.exports.handler = async (event, context) => {
 
     // Log function end with error
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
-
-    // Force flush all remaining logs before throwing error
-    try {
-      await logger.flush();
-    } catch (flushError) {
-      // Silent fail - don't let flush errors mask the original error
-    }
-
-    throw error;
   }
 };
+
+module.exports.handler = withScheduledLogFlushing(
+  baseHandler,
+  "discovery-ingestion"
+);

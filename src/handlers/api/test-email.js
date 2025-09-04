@@ -7,6 +7,7 @@ const AWS = require("aws-sdk");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { getEnvConfig } = require("../../config/environment");
+const { withApiLogFlushing } = require("../../utils/handler-wrapper");
 
 class TestEmailHandler {
   constructor() {
@@ -51,6 +52,7 @@ class TestEmailHandler {
 
       // Send test email
       this.logger.info("Sending test email", { recipient });
+
       const result = await this.sendTestEmail(
         ses,
         envConfig,
@@ -58,7 +60,7 @@ class TestEmailHandler {
         emailContent
       );
 
-      this.logger.info("Test email sent successfully", {
+      this.logger.info(`Test email sent successfully to ${recipient}`, {
         messageId: result.MessageId,
         recipient,
         sender: envConfig.sesSenderEmail,
@@ -147,12 +149,7 @@ Trading System Notification Service
     };
 
     try {
-      const result = await ses.sendEmail(params).promise();
-      this.logger.info("Test email sent successfully", {
-        messageId: result.MessageId,
-        recipient,
-      });
-      return result;
+      return await ses.sendEmail(params).promise();
     } catch (error) {
       this.logger.error("Failed to send test email via SES", error);
       throw new Error(`SES email delivery failed: ${error.message}`);
@@ -161,7 +158,7 @@ Trading System Notification Service
 }
 
 // Main Lambda handler function
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   const handler = new TestEmailHandler();
 
   try {
@@ -197,3 +194,6 @@ module.exports.handler = async (event, context) => {
     };
   }
 };
+
+// Wrap the handler with automatic log flushing
+module.exports.handler = withApiLogFlushing(baseHandler, "test-email");

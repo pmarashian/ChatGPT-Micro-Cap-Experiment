@@ -11,7 +11,7 @@ const FLUSH_INTERVAL = 100; // ms
 const MAX_QUEUE_SIZE = 1000; // Prevent memory issues
 
 // Determine logging endpoint based on environment
-let loggingEndpoint = process.env.LOGGING_ENDPOINT;
+let loggingEndpoint = null; //process.env.LOGGING_ENDPOINT;
 const loggingTimeout = Number(process.env.LOGGING_TIMEOUT_MS || 5000); // Increased default timeout
 
 // Detect offline mode more reliably
@@ -23,18 +23,17 @@ const isOffline =
 // For offline development, use serverless-offline endpoint
 if (isOffline) {
   const port = process.env.SERVERLESS_OFFLINE_HTTP_PORT || 3000; // Updated to match serverless.yml
-  const stage = process.env.STAGE || "dev";
-  loggingEndpoint = `http://localhost:${port}/${stage}/api/logs`;
+  loggingEndpoint = `http://localhost:${port}/api/logs`;
 }
 
-// For AWS deployment, construct API Gateway URL
+// For AWS deployment, use the deployed API Gateway URL
 if (!loggingEndpoint && !isOffline) {
-  const serviceName = process.env.SERVICE_NAME || "chatgpt-trading-phase1";
-  const stage = process.env.STAGE || "dev";
-  const region = process.env.AWS_REGION || "us-east-1";
+  const apiGatewayUrl = process.env.API_GATEWAY_URL;
 
-  // This will be the API Gateway URL pattern
-  loggingEndpoint = `https://${serviceName}-${stage}.execute-api.${region}.amazonaws.com/${stage}/api/logs`;
+  if (apiGatewayUrl) {
+    // Use the deployed API Gateway URL from CloudFormation output
+    loggingEndpoint = `${apiGatewayUrl}/api/logs`;
+  }
 }
 
 // Flush logs to endpoint
@@ -76,7 +75,6 @@ async function flushLogs() {
     console.warn(
       `Logger: Failed to send logs (${error.message}), falling back to console`
     );
-    console.warn(`Logging endpoint: ${loggingEndpoint}`);
     logsToSend.forEach((log) =>
       console.log(`[${log.level.toUpperCase()}]`, log.message, log)
     );

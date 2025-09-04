@@ -11,6 +11,8 @@ const {
   invokeLambdaFunction,
 } = require("../../utils/lambda-client");
 
+const { withApiLogFlushing } = require("../../utils/handler-wrapper");
+
 let logger;
 let errorHandler;
 let lambda;
@@ -18,7 +20,7 @@ let lambda;
 /**
  * API handler for triggering universe build manually
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("trigger-universe-build");
   errorHandler = new ErrorHandler("trigger-universe-build");
@@ -51,9 +53,6 @@ module.exports.handler = async (event, context) => {
 
     // Log function end
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
-
-    // Force flush all remaining logs before returning
-    await logger.flush();
 
     return {
       statusCode: 202, // Accepted - asynchronous operation
@@ -105,3 +104,9 @@ module.exports.handler = async (event, context) => {
     };
   }
 };
+
+// Wrap the handler with automatic log flushing
+module.exports.handler = withApiLogFlushing(
+  baseHandler,
+  "trigger-universe-build"
+);

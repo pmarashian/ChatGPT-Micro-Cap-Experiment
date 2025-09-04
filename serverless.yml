@@ -70,6 +70,18 @@ provider:
             - lambda:InvokeFunction
           Resource:
             - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-logProcessor"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-universeBuild"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-discoveryIngestion"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-universeRanking"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-marketResearch"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-dailyTrading"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-portfolioUpdate"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-stopLoss"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-emailReport"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-orderMonitor"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-getUniverseLatest"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-getRankedUniverse"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-getEvidence"
   environment:
     AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
     AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
@@ -87,6 +99,7 @@ provider:
     SERVICE_NAME: ${self:service}
     STAGE: ${opt:stage, self:provider.stage}
     IS_OFFLINE: ${env:IS_OFFLINE, 'false'}
+    API_GATEWAY_URL: !GetAtt HttpApi.ApiEndpoint
     # Discovery configuration
     FMP_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):FMP_API_KEY}
     UNIVERSE_MIN_PRICE: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MIN_PRICE}
@@ -508,12 +521,11 @@ functions:
   # Production: Yes - Core logging infrastructure
   logReceiver:
     handler: src/handlers/api/log-receiver.logReceiver
-    timeout: 30
+    timeout: 29
     events:
-      - http:
+      - httpApi:
           path: /api/logs
           method: post
-          cors: true
     environment:
       LOGTAIL_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_API_KEY}
       LOGTAIL_ENDPOINT: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_ENDPOINT}
@@ -595,3 +607,10 @@ resources:
         TimeToLiveSpecification:
           AttributeName: ttl
           Enabled: true
+
+  Outputs:
+    ApiGatewayUrl:
+      Description: "API Gateway URL for the deployed service"
+      Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${opt:stage, self:provider.stage}"
+      Export:
+        Name: ${self:service}-${opt:stage, self:provider.stage}-ApiGatewayUrl

@@ -8,6 +8,7 @@ const RankerService = require("../../services/discovery/ranker");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
+const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
 
 let logger;
 let errorHandler;
@@ -16,7 +17,7 @@ let errorHandler;
  * Scheduled Lambda handler for universe ranking
  * Runs daily after universe build and ingestion
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("universe-ranking");
   errorHandler = new ErrorHandler("universe-ranking");
@@ -81,3 +82,8 @@ module.exports.handler = async (event, context) => {
     throw error;
   }
 };
+
+module.exports.handler = withScheduledLogFlushing(
+  baseHandler,
+  "universe-ranking"
+);
