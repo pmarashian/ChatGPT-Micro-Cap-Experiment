@@ -144,6 +144,64 @@ module.exports.handler = async (event, context) => {
 async function executeTrades(decisions, brokerageService) {
   const results = [];
 
+  // Enforce portfolio-level utilization target for BUY orders
+  try {
+    const portfolioService = new PortfolioService();
+    const portfolio = await portfolioService.getCurrentPortfolio();
+    const { PORTFOLIO_CONFIG } = require("../../config/constants");
+
+    const targetInvestedValue =
+      (portfolio.totalValue || 0) *
+      (PORTFOLIO_CONFIG?.UTILIZATION?.TARGET_PERCENT ?? 1.0);
+    const currentInvestedValue =
+      (portfolio.totalValue || 0) - (portfolio.cash || 0);
+    let remainingBudget = Math.max(
+      0,
+      targetInvestedValue - currentInvestedValue
+    );
+
+    // Pre-fetch prices for BUY decisions to compute spend
+    const buyDecisions = decisions.filter((d) => d.action === "BUY");
+    const tickers = [...new Set(buyDecisions.map((d) => d.ticker))];
+    const marketDataService = new MarketDataService();
+    const md = await marketDataService.getPortfolioMarketData({
+      positions: tickers.map((t) => ({ ticker: t })),
+    });
+
+    // Adjust shares if needed to not exceed remainingBudget
+    for (const d of buyDecisions) {
+      const series = md[d.ticker]?.data;
+      const price =
+        series && series.length > 0 ? series[series.length - 1].close : null;
+      if (!price || !Number.isFinite(price) || !Number.isFinite(d.shares))
+        continue;
+      const intendedCost = d.shares * price;
+      if (intendedCost > remainingBudget && remainingBudget > 0) {
+        const adjustedShares = Math.floor(remainingBudget / price);
+        if (adjustedShares >= 1) {
+          logger.info(
+            `Adjusting ${d.ticker} shares from ${d.shares} to ${adjustedShares} to respect utilization target`
+          );
+          d.shares = adjustedShares;
+          remainingBudget -= adjustedShares * price;
+        } else {
+          // No budget left for at least 1 share; convert to HOLD
+          logger.info(
+            `Skipping ${d.ticker} BUY due to utilization cap; insufficient remaining budget`
+          );
+          d.action = "HOLD";
+        }
+      } else if (intendedCost <= remainingBudget) {
+        remainingBudget -= intendedCost;
+      }
+    }
+  } catch (e) {
+    logger.warn(
+      "Utilization enforcement skipped due to error",
+      e?.message || e
+    );
+  }
+
   for (const decision of decisions) {
     try {
       // Skip HOLD decisions
