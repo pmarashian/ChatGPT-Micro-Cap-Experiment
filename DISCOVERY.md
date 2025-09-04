@@ -179,7 +179,7 @@
 - Does: Builds prompt with portfolio snapshot + market data + historical context + retrieved evidence; calls LLM; enforces JSON schema with citations; parses and saves research; caches market data
 - Output: Research JSON with company evaluations, discoveries, citations; market data cached
 
-### 5) Scoring & Ranking
+### 5) Scoring &how Ranking
 
 - Service: `src/services/discovery/ranker.js` (new)
 - Uses: Structured fundamentals, catalysts, momentum/liquidity, evidence quality

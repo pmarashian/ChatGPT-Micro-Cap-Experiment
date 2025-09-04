@@ -271,6 +271,252 @@ class Validators {
     }
     return true;
   }
+
+  /**
+   * Validate AI research response schema with citations
+   * @param {Object} response - AI research response to validate
+   */
+  validateAiResearchResponse(response) {
+    try {
+      // Check required top-level fields
+      if (!response || typeof response !== "object") {
+        throw new Error("Research response must be a valid object");
+      }
+
+      // Validate version
+      if (response.version !== "2.0") {
+        throw new Error(
+          `Invalid version: expected 2.0, got ${response.version}`
+        );
+      }
+
+      // Validate generatedAt
+      if (!response.generatedAt) {
+        throw new Error("generatedAt field is required");
+      }
+
+      // Validate researchSummary
+      if (
+        !response.researchSummary ||
+        typeof response.researchSummary !== "string"
+      ) {
+        throw new Error("researchSummary is required and must be a string");
+      }
+
+      // Validate sectorAnalysis (optional but should exist)
+      if (response.sectorAnalysis) {
+        this.validateSectorAnalysis(response.sectorAnalysis);
+      }
+
+      // Validate companyEvaluations array
+      if (
+        !response.companyEvaluations ||
+        !Array.isArray(response.companyEvaluations)
+      ) {
+        throw new Error("companyEvaluations must be an array");
+      }
+
+      // Validate each company evaluation
+      response.companyEvaluations.forEach((evaluation, index) => {
+        this.validateCompanyEvaluation(evaluation, index);
+      });
+
+      // Validate newDiscoveries (optional)
+      if (response.newDiscoveries && !Array.isArray(response.newDiscoveries)) {
+        throw new Error("newDiscoveries must be an array");
+      }
+
+      return true;
+    } catch (error) {
+      this.errorHandler.handleValidationError(
+        "aiResearchResponse",
+        response,
+        "valid research schema with citations"
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Validate sector analysis object
+   * @param {Object} sectorAnalysis - Sector analysis to validate
+   */
+  validateSectorAnalysis(sectorAnalysis) {
+    const validSentiments = ["bullish", "neutral", "bearish"];
+
+    if (
+      sectorAnalysis.overallSentiment &&
+      !validSentiments.includes(sectorAnalysis.overallSentiment)
+    ) {
+      throw new Error(
+        `Invalid overallSentiment: must be one of ${validSentiments.join(", ")}`
+      );
+    }
+
+    // Validate arrays
+    ["keyTrends", "riskFactors", "opportunityAreas"].forEach((field) => {
+      if (sectorAnalysis[field] && !Array.isArray(sectorAnalysis[field])) {
+        throw new Error(`${field} must be an array`);
+      }
+    });
+  }
+
+  /**
+   * Validate individual company evaluation
+   * @param {Object} evaluation - Company evaluation to validate
+   * @param {number} index - Index in array for error messages
+   */
+  validateCompanyEvaluation(evaluation, index) {
+    if (!evaluation || typeof evaluation !== "object") {
+      throw new Error(`Company evaluation ${index} must be a valid object`);
+    }
+
+    // Required fields
+    const requiredFields = ["ticker", "companyName", "recommendation"];
+    requiredFields.forEach((field) => {
+      if (!evaluation[field]) {
+        throw new Error(`Company evaluation ${index}: ${field} is required`);
+      }
+    });
+
+    // Validate ticker format
+    if (!/^[A-Z0-9-]+$/.test(evaluation.ticker)) {
+      throw new Error(
+        `Company evaluation ${index}: invalid ticker "${evaluation.ticker}". Must be uppercase letters, numbers, and hyphens only`
+      );
+    }
+
+    // Validate recommendation
+    const validRecommendations = ["BUY", "MONITOR", "AVOID"];
+    if (!validRecommendations.includes(evaluation.recommendation)) {
+      throw new Error(
+        `Company evaluation ${index}: invalid recommendation "${
+          evaluation.recommendation
+        }". Must be one of: ${validRecommendations.join(", ")}`
+      );
+    }
+
+    // Validate conviction level
+    const validConvictionLevels = ["high", "medium", "low"];
+    if (
+      evaluation.convictionLevel &&
+      !validConvictionLevels.includes(evaluation.convictionLevel)
+    ) {
+      throw new Error(
+        `Company evaluation ${index}: invalid convictionLevel "${
+          evaluation.convictionLevel
+        }". Must be one of: ${validConvictionLevels.join(", ")}`
+      );
+    }
+
+    // Validate valuation
+    const validValuations = ["undervalued", "fair", "overvalued"];
+    if (
+      evaluation.valuation &&
+      !validValuations.includes(evaluation.valuation)
+    ) {
+      throw new Error(
+        `Company evaluation ${index}: invalid valuation "${
+          evaluation.valuation
+        }". Must be one of: ${validValuations.join(", ")}`
+      );
+    }
+
+    // CRITICAL: Validate citations array
+    this.validateCitations(evaluation.citations, index);
+
+    // Validate optional arrays
+    ["catalysts", "risks"].forEach((field) => {
+      if (evaluation[field] && !Array.isArray(evaluation[field])) {
+        throw new Error(
+          `Company evaluation ${index}: ${field} must be an array`
+        );
+      }
+    });
+
+    // Validate numeric fields
+    if (
+      evaluation.marketCap !== undefined &&
+      (typeof evaluation.marketCap !== "number" || evaluation.marketCap < 0)
+    ) {
+      throw new Error(
+        `Company evaluation ${index}: marketCap must be a positive number`
+      );
+    }
+
+    if (
+      evaluation.qualityScore !== undefined &&
+      (typeof evaluation.qualityScore !== "number" ||
+        evaluation.qualityScore < 0 ||
+        evaluation.qualityScore > 100)
+    ) {
+      throw new Error(
+        `Company evaluation ${index}: qualityScore must be a number between 0 and 100`
+      );
+    }
+  }
+
+  /**
+   * Validate citations array - CRITICAL for evidence-grounded research
+   * @param {Array} citations - Citations array to validate
+   * @param {number} evaluationIndex - Index of the company evaluation
+   */
+  validateCitations(citations, evaluationIndex) {
+    if (!citations || !Array.isArray(citations) || citations.length === 0) {
+      throw new Error(
+        `Company evaluation ${evaluationIndex}: citations array is required and must contain at least one citation`
+      );
+    }
+
+    citations.forEach((citation, citationIndex) => {
+      if (!citation || typeof citation !== "object") {
+        throw new Error(
+          `Company evaluation ${evaluationIndex}, citation ${citationIndex}: must be a valid object`
+        );
+      }
+
+      // Required citation fields
+      const requiredCitationFields = [
+        "url",
+        "source",
+        "publishedAt",
+        "snippet",
+      ];
+      requiredCitationFields.forEach((field) => {
+        if (!citation[field]) {
+          throw new Error(
+            `Company evaluation ${evaluationIndex}, citation ${citationIndex}: ${field} is required`
+          );
+        }
+      });
+
+      // Validate URL format
+      try {
+        new URL(citation.url);
+      } catch (error) {
+        throw new Error(
+          `Company evaluation ${evaluationIndex}, citation ${citationIndex}: invalid URL format "${citation.url}"`
+        );
+      }
+
+      // Validate publishedAt is a valid date string
+      if (isNaN(Date.parse(citation.publishedAt))) {
+        throw new Error(
+          `Company evaluation ${evaluationIndex}, citation ${citationIndex}: invalid publishedAt date "${citation.publishedAt}"`
+        );
+      }
+
+      // Validate snippet has meaningful content
+      if (
+        typeof citation.snippet !== "string" ||
+        citation.snippet.trim().length < 10
+      ) {
+        throw new Error(
+          `Company evaluation ${evaluationIndex}, citation ${citationIndex}: snippet must be a string with at least 10 characters`
+        );
+      }
+    });
+  }
 }
 
 module.exports = Validators;

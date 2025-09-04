@@ -88,6 +88,78 @@ class AIService {
   }
 
   /**
+   * Get grounded research from AI with evidence citations
+   * @param {Object} portfolioData - Current portfolio state
+   * @param {Object} marketData - Current market data
+   * @param {string} aiContext - Historical AI context
+   * @param {Object} evidenceBundle - Evidence bundle with fundamentals and news
+   * @returns {Promise<Object>} AI research with citations
+   */
+  async getGroundedResearch(
+    portfolioData,
+    marketData,
+    aiContext,
+    evidenceBundle
+  ) {
+    try {
+      this.logger.info("Generating AI grounded research", {
+        portfolioValue: portfolioData.totalValue,
+        tickersWithEvidence: Object.keys(evidenceBundle).length,
+      });
+
+      const prompt = this.buildGroundedResearchPrompt(
+        portfolioData,
+        marketData,
+        aiContext,
+        evidenceBundle
+      );
+
+      this.logger.debug("Grounded research prompt built", {
+        promptLength: prompt.length,
+        evidenceTickers: Object.keys(evidenceBundle).length,
+      });
+
+      // Call OpenAI with research system message
+      const response = await this.callOpenAI(prompt, true); // true for research
+      this.logger.debug("Raw AI research response received", response.length);
+
+      // Parse and validate research response
+      const parsedResponse = this.parseResearchResponse(response);
+
+      // Validate citations and retry if necessary
+      const validatedResponse = await this.validateAndRetryCitations(
+        parsedResponse,
+        prompt,
+        portfolioData,
+        marketData,
+        aiContext,
+        evidenceBundle
+      );
+
+      // Save research to memory
+      try {
+        await this.memoryService.saveAIResearch(validatedResponse);
+        this.logger.debug("Grounded research saved to memory");
+      } catch (memoryError) {
+        this.logger.warn(
+          "Failed to save grounded research to memory",
+          memoryError
+        );
+      }
+
+      this.logger.info("Grounded research generated successfully", {
+        companyEvaluations: validatedResponse.companyEvaluations?.length || 0,
+        totalCitations: this.countTotalCitations(validatedResponse),
+      });
+
+      return validatedResponse;
+    } catch (error) {
+      this.logger.error("Grounded research generation failed", error);
+      throw error;
+    }
+  }
+
+  /**
    * Build the trading prompt using centralized prompts
    */
   buildTradingPrompt(portfolioData, marketData, aiContext = "") {
@@ -125,6 +197,297 @@ class AIService {
       performanceMetrics,
       aiContext
     );
+  }
+
+  /**
+   * Build grounded research prompt with evidence
+   * @param {Object} portfolioData - Current portfolio state
+   * @param {Object} marketData - Current market data
+   * @param {string} aiContext - Historical AI context
+   * @param {Object} evidenceBundle - Evidence bundle with fundamentals and news
+   * @returns {string} Complete research prompt
+   */
+  buildGroundedResearchPrompt(
+    portfolioData,
+    marketData,
+    aiContext,
+    evidenceBundle
+  ) {
+    const today = this.getTradingDate();
+    const portfolioSnapshot = formatPortfolioSnapshot(portfolioData);
+    const priceVolumeTable = this.formatPriceVolumeTable(marketData);
+    const performanceMetrics = formatPerformanceMetrics();
+    const evidenceSection = this.formatEvidenceBundle(evidenceBundle);
+
+    return `================================================================
+Evidence-Grounded Research Analysis — ${today}
+================================================================
+
+${priceVolumeTable}
+
+${performanceMetrics}
+
+${portfolioSnapshot}
+
+${evidenceSection}
+
+${aiContext}
+
+[ Your Instructions - Evidence-Grounded Research Analyst ]
+You are an expert micro-cap biotech research analyst. Your task is to perform comprehensive analysis using the provided evidence (fundamentals + news) and generate well-supported research with mandatory citations.
+
+EVIDENCE REQUIREMENTS:
+- Use ONLY the provided evidence for your analysis
+- Cite specific URLs from news articles and fundamentals sources
+- Each material claim must have at least one citation
+- Citations must include source, published date, and relevant snippet
+
+CITATION FORMAT:
+- Per-company citations required (not per-claim for v1)
+- Format: [{ "url": "...", "source": "...", "publishedAt": "...", "snippet": "..." }]
+
+ANALYSIS FRAMEWORK:
+1. Review all provided evidence for each company
+2. Evaluate fundamentals (cash position, runway, valuation)
+3. Analyze recent news and catalysts
+4. Assess competitive positioning and market opportunities
+5. Generate research with citations for each evaluated company
+
+IMPORTANT: If you cannot find sufficient evidence to evaluate a company, exclude it from your analysis rather than making unsupported claims.
+
+Based on your analysis of the provided evidence, provide comprehensive research findings in the following strict JSON format:
+
+{
+  "version": "2.0",
+  "generatedAt": "${new Date().toISOString()}",
+  "researchSummary": "Comprehensive sector analysis summary based on evidence",
+  "sectorAnalysis": {
+    "overallSentiment": "bullish|neutral|bearish",
+    "keyTrends": ["trend1", "trend2"],
+    "riskFactors": ["risk1", "risk2"],
+    "opportunityAreas": ["area1", "area2"]
+  },
+  "companyEvaluations": [
+    {
+      "ticker": "TICKER",
+      "companyName": "Company Name",
+      "marketCap": 75000000,
+      "sector": "oncology|neurology|cardiology|etc",
+      "fundamentalAnalysis": "Analysis based on provided fundamentals data",
+      "competitivePosition": "Market position based on evidence",
+      "catalysts": ["catalyst1", "catalyst2"],
+      "risks": ["risk1", "risk2"],
+      "valuation": "undervalued|fair|overvalued",
+      "recommendation": "BUY|MONITOR|AVOID",
+      "convictionLevel": "high|medium|low",
+      "qualityScore": 85,
+      "citations": [
+        {
+          "url": "https://example.com/article",
+          "source": "FMP",
+          "publishedAt": "2024-01-15T10:00:00Z",
+          "snippet": "Relevant text from article or fundamentals..."
+        }
+      ]
+    }
+  ],
+  "nextResearchFocus": "Areas requiring further investigation"
+}`;
+  }
+
+  /**
+   * Format evidence bundle for prompt inclusion
+   * @param {Object} evidenceBundle - Evidence bundle with fundamentals and news
+   * @returns {string} Formatted evidence section
+   */
+  formatEvidenceBundle(evidenceBundle) {
+    let evidenceSection = "[ Evidence Bundle ]\n";
+
+    Object.keys(evidenceBundle).forEach((ticker) => {
+      const evidence = evidenceBundle[ticker];
+      if (!evidence) return;
+
+      evidenceSection += `\n=== ${ticker} ===\n`;
+
+      // Add fundamentals
+      if (evidence.fundamentals) {
+        evidenceSection += `FUNDAMENTALS (as of ${evidence.fundamentals.asOfDate}):\n`;
+        evidenceSection += `- Market Cap: $${evidence.fundamentals.marketCap?.toLocaleString()}\n`;
+        evidenceSection += `- Shares Outstanding: ${evidence.fundamentals.sharesOutstanding?.toLocaleString()}\n`;
+        evidenceSection += `- Cash: $${evidence.fundamentals.cash?.toLocaleString()}\n`;
+        evidenceSection += `- Total Debt: $${evidence.fundamentals.totalDebt?.toLocaleString()}\n`;
+        evidenceSection += `- Operating Cash Flow: $${evidence.fundamentals.operatingCashFlow?.toLocaleString()}\n`;
+        evidenceSection += `- Revenue: $${evidence.fundamentals.revenue?.toLocaleString()}\n`;
+        if (evidence.fundamentals.runwayMonths) {
+          evidenceSection += `- Cash Runway: ${evidence.fundamentals.runwayMonths} months\n`;
+        }
+        evidenceSection += `\n`;
+      }
+
+      // Add recent news
+      if (evidence.news && evidence.news.length > 0) {
+        evidenceSection += `RECENT NEWS (last 24h):\n`;
+        evidence.news.forEach((news, index) => {
+          evidenceSection += `${index + 1}. ${news.headline}\n`;
+          evidenceSection += `   Source: ${news.source} (${news.publishedAt})\n`;
+          evidenceSection += `   URL: ${news.url}\n`;
+          evidenceSection += `   Summary: ${news.snippet}\n\n`;
+        });
+      }
+    });
+
+    return evidenceSection;
+  }
+
+  /**
+   * Validate citations and retry if necessary
+   * @param {Object} response - Parsed AI response
+   * @param {string} originalPrompt - Original prompt
+   * @param {Object} portfolioData - Portfolio data
+   * @param {Object} marketData - Market data
+   * @param {string} aiContext - AI context
+   * @param {Object} evidenceBundle - Evidence bundle
+   * @returns {Promise<Object>} Validated response with citations
+   */
+  async validateAndRetryCitations(
+    response,
+    originalPrompt,
+    portfolioData,
+    marketData,
+    aiContext,
+    evidenceBundle
+  ) {
+    try {
+      // Check if response has company evaluations with citations
+      if (
+        !response.companyEvaluations ||
+        !Array.isArray(response.companyEvaluations)
+      ) {
+        throw new Error("Missing or invalid companyEvaluations array");
+      }
+
+      let needsRetry = false;
+      const invalidCompanies = [];
+
+      // Validate each company evaluation has citations
+      response.companyEvaluations.forEach((evaluation, index) => {
+        if (
+          !evaluation.citations ||
+          !Array.isArray(evaluation.citations) ||
+          evaluation.citations.length === 0
+        ) {
+          needsRetry = true;
+          invalidCompanies.push(evaluation.ticker || `Company ${index + 1}`);
+        }
+      });
+
+      if (!needsRetry) {
+        this.logger.debug("All company evaluations have valid citations");
+        return response;
+      }
+
+      this.logger.warn("Missing citations detected, retrying", {
+        invalidCompanies: invalidCompanies.join(", "),
+      });
+
+      // Build retry prompt
+      const retryPrompt = this.buildCitationRetryPrompt(
+        originalPrompt,
+        response,
+        invalidCompanies
+      );
+
+      // Retry once
+      const retryResponse = await this.callOpenAI(retryPrompt, true);
+      const retryParsedResponse = this.parseResearchResponse(retryResponse);
+
+      // Validate retry response
+      if (
+        !retryParsedResponse.companyEvaluations ||
+        !Array.isArray(retryParsedResponse.companyEvaluations)
+      ) {
+        throw new Error("Retry response missing companyEvaluations");
+      }
+
+      // Check if retry fixed the issues
+      const stillInvalid = [];
+      retryParsedResponse.companyEvaluations.forEach((evaluation, index) => {
+        if (
+          !evaluation.citations ||
+          !Array.isArray(evaluation.citations) ||
+          evaluation.citations.length === 0
+        ) {
+          stillInvalid.push(evaluation.ticker || `Company ${index + 1}`);
+        }
+      });
+
+      if (stillInvalid.length > 0) {
+        this.logger.error("Citation validation failed after retry", {
+          invalidCompanies: stillInvalid.join(", "),
+        });
+
+        // Drop companies without citations and continue
+        retryParsedResponse.companyEvaluations =
+          retryParsedResponse.companyEvaluations.filter(
+            (evaluation) =>
+              evaluation.citations &&
+              Array.isArray(evaluation.citations) &&
+              evaluation.citations.length > 0
+          );
+
+        this.logger.warn("Dropped companies without citations", {
+          droppedCount:
+            response.companyEvaluations.length -
+            retryParsedResponse.companyEvaluations.length,
+          remainingCount: retryParsedResponse.companyEvaluations.length,
+        });
+      }
+
+      return retryParsedResponse;
+    } catch (error) {
+      this.logger.error("Citation validation and retry failed", error);
+      throw new Error(`Citation validation error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Build citation retry prompt
+   * @param {string} originalPrompt - Original prompt
+   * @param {Object} originalResponse - Original response
+   * @param {Array} invalidCompanies - Companies missing citations
+   * @returns {string} Retry prompt
+   */
+  buildCitationRetryPrompt(originalPrompt, originalResponse, invalidCompanies) {
+    return `${originalPrompt}
+
+[ CITATION VALIDATION FAILURE ]
+The following companies are missing required citations:
+${invalidCompanies.join(", ")}
+
+CRITICAL REQUIREMENT: Every company evaluation MUST include a "citations" array with at least one citation containing url, source, publishedAt, and snippet.
+
+Please revise your analysis to include proper citations for ALL evaluated companies.`;
+  }
+
+  /**
+   * Count total citations in response
+   * @param {Object} response - AI response
+   * @returns {number} Total citation count
+   */
+  countTotalCitations(response) {
+    if (
+      !response.companyEvaluations ||
+      !Array.isArray(response.companyEvaluations)
+    ) {
+      return 0;
+    }
+
+    return response.companyEvaluations.reduce((total, evaluation) => {
+      if (evaluation.citations && Array.isArray(evaluation.citations)) {
+        return total + evaluation.citations.length;
+      }
+      return total;
+    }, 0);
   }
 
   /**

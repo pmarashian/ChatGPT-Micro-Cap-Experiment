@@ -32,7 +32,7 @@ const lambda = new AWS.Lambda({
   apiVersion: "2015-03-31",
   // endpoint needs to be set only if it deviates from the default
   endpoint: isOffline
-    ? "http://localhost:3003" // serverless-offline Lambda port
+    ? "http://localhost:3002" // serverless-offline Lambda port (matches serverless.yml)
     : "https://lambda.us-east-1.amazonaws.com",
 });
 
@@ -57,7 +57,7 @@ module.exports.logReceiver = async (event) => {
 
     // For offline development, process logs directly to avoid Lambda invoke issues
     if (isOffline) {
-      console.log("Processing logs directly in offline mode...");
+      // console.log("Processing logs directly in offline mode...");
       // Process logs directly without Lambda invoke
       if (logProcessor) {
         await logProcessor({ logs });

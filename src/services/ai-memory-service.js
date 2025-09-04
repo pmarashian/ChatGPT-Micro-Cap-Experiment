@@ -354,17 +354,22 @@ class AIMemoryService {
     try {
       const params = {
         TableName: this.tableName,
-        KeyConditionExpression: "id = :id",
+        IndexName: "TickerIndex",
+        KeyConditionExpression: "GSI1PK = :gsi1pk",
+        FilterExpression: "begins_with(PK, :pkPrefix)",
         ExpressionAttributeValues: {
-          ":id": ITEM_TYPES.AI_RESEARCH,
+          ":gsi1pk": "SUMMARY",
+          ":pkPrefix": `${ITEM_TYPES.AI_RESEARCH}#SUMMARY`,
         },
-        ScanIndexForward: false, // Most recent first
+        // Note: ScanIndexForward removed - query returns items in index order
         Limit: limit,
       };
 
       const result = await this.dynamodb.query(params).promise();
 
-      this.logger.debug(`Retrieved ${result.Items.length} research items`);
+      this.logger.debug(
+        `Retrieved ${result.Items.length} research summary items`
+      );
       return result.Items;
     } catch (error) {
       this.logger.error("Failed to get recent research", error);
@@ -380,17 +385,22 @@ class AIMemoryService {
     try {
       const params = {
         TableName: this.tableName,
-        KeyConditionExpression: "id = :id",
+        IndexName: "TickerIndex",
+        KeyConditionExpression: "GSI1PK = :gsi1pk",
+        FilterExpression: "begins_with(PK, :pkPrefix)",
         ExpressionAttributeValues: {
-          ":id": ITEM_TYPES.AI_DECISION,
+          ":gsi1pk": "SUMMARY",
+          ":pkPrefix": `${ITEM_TYPES.AI_DECISION}#SUMMARY`,
         },
-        ScanIndexForward: false, // Most recent first
+        // Note: ScanIndexForward removed - query returns items in index order
         Limit: limit,
       };
 
       const result = await this.dynamodb.query(params).promise();
 
-      this.logger.debug(`Retrieved ${result.Items.length} decision items`);
+      this.logger.debug(
+        `Retrieved ${result.Items.length} decision summary items`
+      );
       return result.Items;
     } catch (error) {
       this.logger.error("Failed to get recent decisions", error);
@@ -405,24 +415,31 @@ class AIMemoryService {
     try {
       const params = {
         TableName: this.tableName,
-        Key: {
-          id: ITEM_TYPES.MARKET_DATA,
+        IndexName: "TickerIndex",
+        KeyConditionExpression: "GSI1PK = :gsi1pk",
+        FilterExpression: "begins_with(PK, :pkPrefix)",
+        ExpressionAttributeValues: {
+          ":gsi1pk": "SUMMARY",
+          ":pkPrefix": `${ITEM_TYPES.MARKET_DATA}#SUMMARY`,
         },
+        // Note: ScanIndexForward removed - query returns items in index order
+        Limit: 1,
       };
 
-      const result = await this.dynamodb.get(params).promise();
+      const result = await this.dynamodb.query(params).promise();
 
-      if (result.Item) {
-        const cacheAge = Date.now() - result.Item.timestamp * 1000;
+      if (result.Items && result.Items.length > 0) {
+        const item = result.Items[0];
+        const cacheAge = Date.now() - new Date(item.timestamp).getTime();
         const maxAge =
           PORTFOLIO_CONFIG.MARKET_DATA_CACHE.MAX_AGE_HOURS * 60 * 60 * 1000;
 
         if (cacheAge < maxAge) {
           this.logger.debug("Using cached market data", {
             ageMinutes: Math.floor(cacheAge / (1000 * 60)),
-            tickerCount: Object.keys(result.Item.data || {}).length,
+            tickerCount: Object.keys(item.data || {}).length,
           });
-          return result.Item.data;
+          return item.data;
         } else {
           this.logger.debug("Cached market data too old, will fetch fresh");
         }
@@ -793,7 +810,9 @@ class AIMemoryService {
       this.logger.debug(`Retrieved ${tickers.length} discovered tickers`);
       return tickers;
     } catch (error) {
-      this.logger.warn("Failed to retrieve discovered tickers", error.message);
+      this.logger.warn(
+        `Failed to retrieve discovered tickers: ${error.message}`
+      );
       return [];
     }
   }
@@ -813,7 +832,7 @@ class AIMemoryService {
         ExpressionAttributeValues: {
           ":ticker": ticker,
         },
-        ScanIndexForward: false, // Most recent first
+        // Note: ScanIndexForward removed - query returns items in index order
         Limit: limit,
       };
 
@@ -844,7 +863,7 @@ class AIMemoryService {
         ExpressionAttributeValues: {
           ":ticker": ticker,
         },
-        ScanIndexForward: false, // Most recent first
+        // Note: ScanIndexForward removed - query returns items in index order
         Limit: limit,
       };
 
@@ -875,7 +894,7 @@ class AIMemoryService {
         ExpressionAttributeValues: {
           ":ticker": ticker,
         },
-        ScanIndexForward: false, // Most recent first
+        // Note: ScanIndexForward removed - query returns items in index order
         Limit: limit,
       };
 
@@ -908,7 +927,7 @@ class AIMemoryService {
           ":ticker": ticker,
           ":prefix": "TRADE#",
         },
-        ScanIndexForward: false, // Most recent first
+        // Note: ScanIndexForward removed - query returns items in index order
         Limit: limit,
       };
 
@@ -972,6 +991,321 @@ class AIMemoryService {
           totalTrades: 0,
         },
       };
+    }
+  }
+
+  /**
+   * Save evidence data (fundamentals or news)
+   * @param {string} ticker - Ticker symbol
+   * @param {Object} evidenceData - Evidence data to save
+   */
+  async saveEvidence(ticker, evidenceData) {
+    try {
+      const timestamp = new Date().toISOString();
+
+      const item = {
+        // Primary Key (composite)
+        PK: `evidence#${ticker}`,
+        SK: timestamp,
+        // GSI for ticker queries
+        GSI1PK: ticker,
+        GSI1SK: timestamp,
+        // Data
+        itemType: "evidence",
+        type: evidenceData.type, // "fundamentals" or "news"
+        ticker: ticker,
+        source: evidenceData.source,
+        asOfDate: evidenceData.asOfDate,
+        publishedAt: evidenceData.publishedAt || timestamp,
+        raw: evidenceData.raw,
+        structured: evidenceData.structured,
+        recencyDays: evidenceData.recencyDays || 0,
+        stale: evidenceData.stale || false,
+        // TTL: 30 days
+        ttl: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+      };
+
+      // Add type-specific fields
+      if (evidenceData.type === "news") {
+        item.headline = evidenceData.headline;
+        item.snippet = evidenceData.snippet;
+        item.url = evidenceData.url;
+        item.sourceName = evidenceData.sourceName;
+      }
+
+      const params = {
+        TableName: this.tableName,
+        Item: item,
+      };
+
+      await this.dynamodb.put(params).promise();
+
+      this.logger.debug(`Saved ${evidenceData.type} evidence for ${ticker}`);
+      return item;
+    } catch (error) {
+      this.logger.error(`Failed to save evidence for ${ticker}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get evidence bundle for ticker (fundamentals + news)
+   * @param {string} ticker - Ticker symbol
+   * @returns {Promise<Object>} Evidence bundle or null
+   */
+  async getEvidenceBundle(ticker) {
+    try {
+      const params = {
+        TableName: this.tableName,
+        IndexName: "TickerIndex",
+        KeyConditionExpression: "GSI1PK = :ticker",
+        FilterExpression: "begins_with(PK, :prefix)",
+        ExpressionAttributeValues: {
+          ":ticker": ticker,
+          ":prefix": "evidence#",
+        },
+        // Note: ScanIndexForward removed - query will return items in index order
+      };
+
+      const result = await this.dynamodb.query(params).promise();
+
+      if (!result.Items || result.Items.length === 0) {
+        return null;
+      }
+
+      // Separate fundamentals and news
+      const fundamentals = result.Items.filter(
+        (item) => item.type === "fundamentals"
+      );
+      const news = result.Items.filter((item) => item.type === "news");
+
+      // Get latest fundamentals (if not stale)
+      const latestFundamentals =
+        fundamentals.length > 0 ? fundamentals[0] : null;
+      const fundamentalsStale =
+        latestFundamentals &&
+        Date.now() - new Date(latestFundamentals.asOfDate).getTime() >
+          7 * 24 * 60 * 60 * 1000;
+
+      // Get recent news (last 24 hours, not stale)
+      const cutoffTime = Date.now() - 24 * 60 * 60 * 1000;
+      const recentNews = news
+        .filter(
+          (item) =>
+            new Date(item.publishedAt).getTime() > cutoffTime && !item.stale
+        )
+        .slice(0, 5); // Max 5 news items
+
+      // Check if we have sufficient evidence
+      if (!latestFundamentals || fundamentalsStale || recentNews.length === 0) {
+        return null; // Insufficient evidence
+      }
+
+      const bundle = {
+        ticker: ticker,
+        fundamentals: {
+          asOfDate: latestFundamentals.asOfDate,
+          marketCap: latestFundamentals.structured?.marketCap,
+          sharesOutstanding: latestFundamentals.structured?.sharesOutstanding,
+          cash: latestFundamentals.structured?.cashAndCashEquivalents,
+          totalDebt: latestFundamentals.structured?.totalDebt,
+          operatingCashFlow: latestFundamentals.structured?.operatingCashFlow,
+          revenue: latestFundamentals.structured?.revenue,
+          runwayMonths: latestFundamentals.structured?.runwayMonths,
+        },
+        news: recentNews.map((item) => ({
+          headline: item.headline,
+          snippet: item.snippet,
+          url: item.url,
+          source: item.sourceName,
+          publishedAt: item.publishedAt,
+        })),
+      };
+
+      this.logger.debug(`Retrieved evidence bundle for ${ticker}`, {
+        hasFundamentals: !!bundle.fundamentals,
+        newsCount: bundle.news.length,
+      });
+
+      return bundle;
+    } catch (error) {
+      this.logger.error(`Failed to get evidence bundle for ${ticker}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get evidence summary for ticker
+   * @param {string} ticker - Ticker symbol
+   * @returns {Promise<Object>} Evidence summary
+   */
+  async getEvidenceSummary(ticker) {
+    try {
+      const bundle = await this.getEvidenceBundle(ticker);
+
+      if (!bundle) {
+        return {
+          ticker,
+          hasEvidence: false,
+          fundamentals: { count: 0, latest: null },
+          news: { count: 0, latest: null },
+          sufficientForResearch: false,
+        };
+      }
+
+      return {
+        ticker,
+        hasEvidence: true,
+        fundamentals: {
+          count: 1,
+          latest: {
+            asOfDate: bundle.fundamentals.asOfDate,
+            marketCap: bundle.fundamentals.marketCap,
+          },
+        },
+        news: {
+          count: bundle.news.length,
+          latest:
+            bundle.news.length > 0
+              ? {
+                  publishedAt: bundle.news[0].publishedAt,
+                  headline: bundle.news[0].headline,
+                }
+              : null,
+        },
+        sufficientForResearch: true,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get evidence summary for ${ticker}`, error);
+      return {
+        ticker,
+        hasEvidence: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Check if ticker has sufficient evidence for research
+   * @param {string} ticker - Ticker symbol
+   * @returns {Promise<boolean>} True if sufficient evidence exists
+   */
+  async hasSufficientEvidence(ticker) {
+    try {
+      const bundle = await this.getEvidenceBundle(ticker);
+      return bundle !== null;
+    } catch (error) {
+      this.logger.error(
+        `Failed to check evidence sufficiency for ${ticker}`,
+        error
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Save ranked universe snapshot
+   * @param {Object} snapshot - Ranked universe snapshot
+   * @returns {Promise<void>}
+   */
+  async saveRankedUniverseSnapshot(snapshot) {
+    try {
+      const params = {
+        TableName: this.tableName,
+        Item: {
+          PK: "ranked_universe",
+          SK: snapshot.id,
+          type: "ranked_universe_snapshot",
+          snapshotId: snapshot.id,
+          date: snapshot.date,
+          universeSnapshotId: snapshot.universeSnapshotId,
+          totalTickers: snapshot.totalTickers,
+          scores: snapshot.scores,
+          scoringConfig: snapshot.scoringConfig,
+          ttl: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60, // 30 days
+        },
+      };
+
+      await this.dynamodb.put(params).promise();
+      this.logger.info("Saved ranked universe snapshot", {
+        snapshotId: snapshot.id,
+        totalTickers: snapshot.totalTickers,
+      });
+    } catch (error) {
+      this.logger.error("Failed to save ranked universe snapshot", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get latest ranked universe snapshot
+   * @returns {Promise<Object|null>} Latest ranked snapshot or null
+   */
+  async getLatestRankedUniverse() {
+    try {
+      // Scan for ranked universe items - we'll sort them manually to get the most recent
+      const params = {
+        TableName: this.tableName,
+        FilterExpression: "PK = :pk",
+        ExpressionAttributeValues: {
+          ":pk": "ranked_universe",
+        },
+      };
+
+      const result = await this.dynamodb.scan(params).promise();
+
+      if (result.Items && result.Items.length > 0) {
+        // Sort by date to get the most recent snapshot
+        const sortedItems = result.Items.sort(
+          (a, b) => new Date(b.date) - new Date(a.date)
+        );
+        const snapshot = sortedItems[0];
+
+        this.logger.debug("Retrieved latest ranked universe", {
+          snapshotId: snapshot.snapshotId,
+          date: snapshot.date,
+          totalTickers: snapshot.totalTickers,
+        });
+        return snapshot;
+      }
+
+      this.logger.debug("No ranked universe snapshot found");
+      return null;
+    } catch (error) {
+      this.logger.error("Failed to get latest ranked universe", error);
+      return null;
+    }
+  }
+
+  /**
+   * Get top N tickers from latest ranked universe
+   * @param {number} limit - Maximum number of tickers to return
+   * @returns {Promise<Array>} Array of top ticker symbols
+   */
+  async getTopRankedTickers(limit = 50) {
+    try {
+      const snapshot = await this.getLatestRankedUniverse();
+      if (!snapshot || !snapshot.scores) {
+        this.logger.debug(
+          "No ranked universe available, returning empty array"
+        );
+        return [];
+      }
+
+      const topTickers = snapshot.scores
+        .slice(0, limit)
+        .map((score) => score.ticker);
+
+      this.logger.debug(`Retrieved ${topTickers.length} top-ranked tickers`, {
+        limit,
+        snapshotId: snapshot.snapshotId,
+        topScore: snapshot.scores[0]?.compositeScore || 0,
+      });
+
+      return topTickers;
+    } catch (error) {
+      this.logger.error("Failed to get top ranked tickers", error);
+      return [];
     }
   }
 

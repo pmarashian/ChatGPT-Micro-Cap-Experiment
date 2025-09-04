@@ -158,6 +158,7 @@ ANALYSIS FRAMEWORK:
 - Assess management quality and strategic execution
 - Consider cash positions, burn rates, and financing needs
 - Look for undervalued opportunities with strong fundamentals
+- REQUIRE CITATIONS: Each company evaluation MUST include citations array with at least one citation (url, source, publishedAt, snippet)
 
 Based on your analysis, provide comprehensive research findings in the following strict JSON format:
 
@@ -185,7 +186,15 @@ Based on your analysis, provide comprehensive research findings in the following
       "recommendation": "BUY|MONITOR|AVOID",
       "convictionLevel": "high|medium|low",
       "qualityScore": 85,
-      "researchNotes": "Key investment highlights and concerns"
+      "researchNotes": "Key investment highlights and concerns",
+      "citations": [
+        {
+          "url": "https://example.com/article",
+          "source": "FMP",
+          "publishedAt": "2024-01-15T10:00:00Z",
+          "snippet": "Relevant text from article supporting the analysis..."
+        }
+      ]
     }
   ],
   "newDiscoveries": [

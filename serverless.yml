@@ -22,6 +22,16 @@ custom:
       - LOGTAIL_SOURCE_TOKEN
       - LOGTAIL_ENDPOINT
       - LOGTAIL_API_KEY
+      # Discovery configuration
+      - FMP_API_KEY
+      - UNIVERSE_MIN_PRICE
+      - UNIVERSE_MIN_MARKET_CAP
+      - UNIVERSE_MAX_MARKET_CAP
+      - UNIVERSE_MIN_ADV_USD
+      - UNIVERSE_MAX_TICKERS_PER_RUN
+      - UNIVERSE_BATCH_SIZE
+      - DISCOVERY_MAX_CONCURRENCY
+      - NEWS_MAX_ITEMS_PER_TICKER
   serverless-offline:
     httpPort: 3000
     lambdaPort: 3002
@@ -77,19 +87,41 @@ provider:
     SERVICE_NAME: ${self:service}
     STAGE: ${opt:stage, self:provider.stage}
     IS_OFFLINE: ${env:IS_OFFLINE, 'false'}
+    # Discovery configuration
+    FMP_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):FMP_API_KEY}
+    UNIVERSE_MIN_PRICE: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MIN_PRICE}
+    UNIVERSE_MIN_MARKET_CAP: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MIN_MARKET_CAP}
+    UNIVERSE_MAX_MARKET_CAP: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MAX_MARKET_CAP}
+    UNIVERSE_MIN_ADV_USD: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MIN_ADV_USD}
+    UNIVERSE_MAX_TICKERS_PER_RUN: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MAX_TICKERS_PER_RUN}
+    UNIVERSE_BATCH_SIZE: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_BATCH_SIZE}
+    DISCOVERY_MAX_CONCURRENCY: ${file(.env.${opt:stage, 'dev'}.json):DISCOVERY_MAX_CONCURRENCY}
+    NEWS_MAX_ITEMS_PER_TICKER: ${file(.env.${opt:stage, 'dev'}.json):NEWS_MAX_ITEMS_PER_TICKER}
 
 functions:
-  # Scheduled Functions - Optimized Pipeline
+  # ============================================================================
+  # SCHEDULED FUNCTIONS - PRODUCTION PIPELINE
+  # These functions run automatically on schedule for the trading system
+  # ============================================================================
+
+  # AI Market Research - Production
+  # Generates deep AI analysis for high-potential tickers twice daily
+  # Runs after discovery ingestion to analyze newly collected data
+  # Production: Yes - Core research pipeline
   marketResearch:
     handler: src/handlers/scheduled/market-research.handler
     timeout: 600 # 10 minutes for deep research
     events:
-      - schedule: cron(0 11 * * ? *) # 6 AM ET (11 AM UTC) - Pre-market research
-      - schedule: cron(0 22 * * ? *) # 5 PM ET (10 PM UTC) - Post-market research
+      - schedule: cron(0 1 * * ? *) # 8 PM ET (1 AM UTC) - After 00:00 UTC ingestion
+      - schedule: cron(0 13 * * ? *) # 8 AM ET (1 PM UTC) - After 12:00 UTC ingestion
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
+  # Daily Trading Engine - Production
+  # Makes automated buy/sell decisions based on AI analysis and market data
+  # Runs at market close to execute trading strategies
+  # Production: Yes - Core trading engine
   dailyTrading:
     handler: src/handlers/scheduled/daily-trading.handler
     timeout: 180 # 3 minutes for trading decisions
@@ -99,11 +131,19 @@ functions:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
+  # Portfolio Position Updates - Production
+  # Updates portfolio positions and calculates performance metrics
+  # Runs after market close to capture end-of-day positions
+  # Production: Yes - Portfolio tracking and reporting
   portfolioUpdate:
     handler: src/handlers/scheduled/portfolio-update.handler
     events:
       - schedule: cron(0 21 * * ? *) # 4:30 PM ET (9:30 PM UTC) - After market close
 
+  # Stop Loss Monitoring - Production
+  # Monitors positions and executes stop-loss orders to limit losses
+  # Runs multiple times during trading hours for timely risk management
+  # Production: Yes - Critical risk management
   stopLoss:
     handler: src/handlers/scheduled/stop-loss.handler
     events:
@@ -114,11 +154,19 @@ functions:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
+  # Daily Email Reports - Production
+  # Sends end-of-day performance and activity reports to administrators
+  # Includes trading summary, portfolio updates, and system health
+  # Production: Yes - Operational monitoring and reporting
   emailReport:
     handler: src/handlers/scheduled/email-report.handler
     events:
       - schedule: cron(0 21 * * ? *) # 4:30 PM ET (9:30 PM UTC) - End of day report
 
+  # Order Status Monitoring - Production
+  # Monitors pending orders and handles order status updates
+  # Ensures orders are filled and handles any issues
+  # Production: Yes - Order execution monitoring
   orderMonitor:
     handler: src/handlers/scheduled/order-monitor.handler
     timeout: 120 # 2 minutes for order monitoring
@@ -129,7 +177,108 @@ functions:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
-  # REST API Endpoints
+  # ============================================================================
+  # REST API ENDPOINTS
+  # HTTP endpoints for manual operations and external integrations
+  # ============================================================================
+
+  # ============================================================================
+  # DISCOVERY API ENDPOINTS - Production
+  # API endpoints for the discovery and research pipeline
+  # ============================================================================
+  # Get Latest Universe - Production
+  # Returns the most recent micro-cap biotech universe snapshot
+  # Used by research pipeline and external integrations
+  # Production: Yes - Core data access for research
+  getUniverseLatest:
+    handler: src/handlers/api/get-universe-latest.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/universe-latest
+          method: get
+          cors: true
+
+  # Get Ranked Universe - Production
+  # Returns the latest ranked universe with composite scores and reason codes
+  # Shows top-scoring tickers from deterministic ranking algorithm
+  # Production: Yes - Ranked discovery results for research
+  getRankedUniverse:
+    handler: src/handlers/api/get-ranked-universe.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/ranked-universe
+          method: get
+          cors: true
+
+  # Get Evidence Data - Production
+  # Retrieves fundamentals, news, and research data for specific tickers
+  # Supports filtering by type (fundamentals/news) and pagination
+  # Production: Yes - Research data access
+  getEvidence:
+    handler: src/handlers/api/get-evidence.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/evidence
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                ticker: true
+                limit: false
+                type: false
+
+  # Trigger Universe Build - Production
+  # Manually triggers the daily universe building process
+  # Rebuilds the micro-cap biotech universe from FMP data
+  # Production: Yes - Manual control of discovery pipeline
+  triggerUniverseBuild:
+    handler: src/handlers/api/trigger-universe-build.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/trigger/universe-build
+          method: post
+          cors: true
+
+  # Trigger Discovery Ingestion - Production
+  # Manually triggers fundamentals and news data collection
+  # Processes prioritized tickers from the universe
+  # Production: Yes - Manual control of data ingestion
+  triggerDiscoveryIngestion:
+    handler: src/handlers/api/trigger-discovery-ingestion.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/trigger/discovery-ingestion
+          method: post
+          cors: true
+
+  # Trigger Universe Ranking - Production
+  # Manually triggers the deterministic ranking algorithm
+  # Computes composite scores for universe tickers based on evidence
+  # Production: Yes - Manual control of ranking process
+  triggerUniverseRanking:
+    handler: src/handlers/api/trigger-universe-ranking.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/trigger/universe-ranking
+          method: post
+          cors: true
+
+  # ============================================================================
+  # TRADING & PORTFOLIO API ENDPOINTS - Production
+  # Core trading system data access and control endpoints
+  # ============================================================================
+
+  # Get Portfolio Data - Production
+  # Returns current portfolio positions, performance, and holdings
+  # Used for portfolio monitoring and external integrations
+  # Production: Yes - Portfolio management and reporting
   getPortfolio:
     handler: src/handlers/api/get-portfolio.handler
     events:
@@ -138,6 +287,10 @@ functions:
           method: get
           cors: true
 
+  # Get Trading History - Production
+  # Returns historical trades, orders, and transaction records
+  # Used for performance analysis and audit trails
+  # Production: Yes - Trading history and analytics
   getTradingHistory:
     handler: src/handlers/api/get-trading-history.handler
     events:
@@ -146,6 +299,10 @@ functions:
           method: get
           cors: true
 
+  # Update System Configuration - Production
+  # Allows runtime configuration changes for trading parameters
+  # Used for dynamic system tuning and parameter optimization
+  # Production: Yes - System configuration management
   updateConfiguration:
     handler: src/handlers/api/update-configuration.handler
     events:
@@ -154,6 +311,10 @@ functions:
           method: put
           cors: true
 
+  # Trigger Backtesting - Development/Testing
+  # Runs historical backtesting simulations on trading strategies
+  # Used for strategy validation and performance testing
+  # Production: No - Testing and strategy development
   triggerBacktest:
     handler: src/handlers/api/trigger-backtest.handler
     events:
@@ -162,6 +323,10 @@ functions:
           method: post
           cors: true
 
+  # Get System Status - Production
+  # Returns overall system health, component status, and metrics
+  # Used for monitoring and operational dashboards
+  # Production: Yes - System monitoring and health checks
   getSystemStatus:
     handler: src/handlers/api/get-system-status.handler
     timeout: 30
@@ -171,15 +336,23 @@ functions:
           method: get
           cors: true
 
+  # Trigger Daily Trading - Production
+  # Manually triggers the daily trading decision process
+  # Used for testing and emergency trading execution
+  # Production: Yes - Manual trading control
   triggerDailyTrading:
     handler: src/handlers/api/trigger-daily-trading.handler
-    timeout: 180 # 3 minutes for trading decisions
+    timeout: 30
     events:
       - http:
           path: /api/trigger-daily-trading
           method: post
           cors: true
 
+  # Get OpenAI Models - Development/Testing
+  # Lists available OpenAI models and their capabilities
+  # Used for AI configuration and model selection testing
+  # Production: No - Development and testing utilities
   getOpenAIModels:
     handler: src/handlers/api/get-openai-models.handler
     timeout: 30
@@ -189,15 +362,28 @@ functions:
           method: get
           cors: true
 
+  # System Reset - Development/Emergency
+  # Completely resets the system state and clears all data
+  # Used for development testing and emergency recovery
+  # Production: Limited - Only for emergency situations
   resetSystem:
     handler: src/handlers/api/reset-system.handler
-    timeout: 60
+    timeout: 30
     events:
       - http:
           path: /api/reset-system
           method: post
           cors: true
 
+  # ============================================================================
+  # TESTING & DEVELOPMENT API ENDPOINTS
+  # Endpoints for testing integrations and system components
+  # ============================================================================
+
+  # Test Brokerage Connection - Development/Testing
+  # Tests Alpaca brokerage API connectivity and authentication
+  # Used for validating trading account setup and permissions
+  # Production: No - Integration testing only
   testBrokerage:
     handler: src/handlers/api/test-brokerage.handler
     timeout: 30
@@ -207,6 +393,10 @@ functions:
           method: post
           cors: true
 
+  # Test Trading Logic - Development/Testing
+  # Tests trading decision logic without actual order execution
+  # Validates AI trading strategies and risk management
+  # Production: No - Dry-run testing only
   testTrading:
     handler: src/handlers/api/test-trading.handler
     timeout: 30
@@ -216,6 +406,10 @@ functions:
           method: post
           cors: true
 
+  # Test Market Data - Development/Testing
+  # Tests market data API connectivity and data retrieval
+  # Validates FMP and Yahoo Finance integrations
+  # Production: No - Integration testing only
   testMarketData:
     handler: src/handlers/api/test-market-data.handler
     timeout: 30
@@ -225,6 +419,15 @@ functions:
           method: get
           cors: true
 
+  # ============================================================================
+  # AI MEMORY & MONITORING ENDPOINTS - Production
+  # Endpoints for AI context, research history, and system monitoring
+  # ============================================================================
+
+  # Get AI Memory - Production
+  # Returns AI research history, decisions, and context data
+  # Used for AI performance analysis and debugging
+  # Production: Yes - AI system monitoring and analysis
   getAIMemory:
     handler: src/handlers/api/get-ai-memory.handler
     timeout: 30
@@ -234,6 +437,10 @@ functions:
           method: get
           cors: true
 
+  # Get Discovery Quality - Production
+  # Returns quality metrics and statistics for the discovery pipeline
+  # Used for monitoring data quality and pipeline performance
+  # Production: Yes - Discovery pipeline monitoring
   getDiscoveryQuality:
     handler: src/handlers/api/get-discovery-quality.handler
     timeout: 30
@@ -243,6 +450,10 @@ functions:
           method: get
           cors: true
 
+  # Get Ticker History - Production
+  # Returns historical price and volume data for specific tickers
+  # Used for technical analysis and research validation
+  # Production: Yes - Historical data access
   getTickerHistory:
     handler: src/handlers/api/get-ticker-history.handler
     timeout: 30
@@ -256,6 +467,10 @@ functions:
               querystrings:
                 ticker: true
 
+  # Test Email System - Development/Testing
+  # Tests SES email delivery and notification system
+  # Validates email templates and delivery infrastructure
+  # Production: No - Email system testing only
   testEmail:
     handler: src/handlers/api/test-email.handler
     timeout: 30
@@ -269,16 +484,28 @@ functions:
               querystrings:
                 recipient: false
 
+  # Trigger Market Research - Production
+  # Manually triggers deep AI market research for specific tickers
+  # Used for on-demand research and strategy development
+  # Production: Yes - Manual research control
   triggerMarketResearch:
     handler: src/handlers/api/trigger-market-research.handler
-    timeout: 600 # 10 minutes for deep research
+    timeout: 30
     events:
       - http:
           path: /api/trigger-market-research
           method: post
           cors: true
 
-  # Logging System
+  # ============================================================================
+  # LOGGING SYSTEM - Production
+  # Centralized logging infrastructure for monitoring and debugging
+  # ============================================================================
+
+  # Log Receiver - Production
+  # Receives and processes log entries from all system components
+  # Forwards logs to external logging service (Logtail)
+  # Production: Yes - Core logging infrastructure
   logReceiver:
     handler: src/handlers/api/log-receiver.logReceiver
     timeout: 30
@@ -291,12 +518,47 @@ functions:
       LOGTAIL_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_API_KEY}
       LOGTAIL_ENDPOINT: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_ENDPOINT}
 
+  # Log Processor - Production
+  # Processes and analyzes log data for monitoring and alerts
+  # Handles scheduled log processing and cleanup
+  # Production: Yes - Log processing and analytics
   logProcessor:
     handler: src/handlers/scheduled/log-processor.logProcessor
     timeout: 60
     environment:
       LOGTAIL_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_API_KEY}
       LOGTAIL_ENDPOINT: ${file(.env.${opt:stage, 'dev'}.json):LOGTAIL_ENDPOINT}
+
+  # ============================================================================
+  # DISCOVERY PIPELINE FUNCTIONS - Production
+  # Core data collection and processing pipeline for micro-cap biotech
+  # ============================================================================
+
+  # Universe Builder - Production
+  # Builds daily micro-cap biotech universe from FMP screener data
+  # Filters and validates tickers for the research pipeline
+  # Production: Yes - Core discovery pipeline
+  universeBuild:
+    handler: src/handlers/scheduled/universe-build.handler
+    timeout: 300 # 5 minutes for universe build
+    events:
+      - schedule: cron(0 3 * * ? *) # 3:00 UTC daily (11:00 PM ET)
+
+  # Discovery Data Ingestion - Production
+  # Collects fundamentals and news data for universe tickers
+  # Processes data in batches with rate limiting and prioritization
+  # Production: Yes - Core data ingestion pipeline
+  discoveryIngestion:
+    handler: src/handlers/scheduled/discovery-ingestion.handler
+    timeout: 600 # 10 minutes for ingestion
+    events:
+      - schedule: cron(0 0,6,12,18 * * ? *) # Every 6 hours at 00:00, 06:00, 12:00, 18:00 UTC
+
+  universeRanking:
+    handler: src/handlers/scheduled/universe-ranking.handler
+    timeout: 300 # 5 minutes for ranking
+    events:
+      - schedule: cron(0 2 * * ? *) # 7 AM ET (2 PM UTC) - After universe build, before research
 
 resources:
   Resources:
@@ -330,3 +592,6 @@ resources:
                 KeyType: RANGE
             Projection:
               ProjectionType: ALL
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true

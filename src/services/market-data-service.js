@@ -40,12 +40,20 @@ class MarketDataService {
 
       const tickerArray = Array.from(discoveredTickers);
       this.logger.debug(
-        `Retrieved ${tickerArray.length} discovered tickers from AI memory`
+        `Retrieved ${tickerArray.length} discovered tickers from AI memory`,
+        {
+          discoveredTickers: tickerArray.sort(),
+          count: tickerArray.length,
+          source: "Recent AI research sessions",
+          researchItemsAnalyzed: recentResearch.length,
+        }
       );
 
       return tickerArray;
     } catch (error) {
-      this.logger.warn("Failed to retrieve discovered tickers", error.message);
+      this.logger.warn(
+        `Failed to retrieve discovered tickers: ${error.message}`
+      );
       return [];
     }
   }
@@ -117,7 +125,17 @@ class MarketDataService {
 
     // Collect all tickers from portfolio
     if (portfolio.positions && portfolio.positions.length > 0) {
-      tickers.push(...portfolio.positions.map((pos) => pos.ticker));
+      const portfolioTickers = portfolio.positions.map((pos) => pos.ticker);
+      tickers.push(...portfolioTickers);
+      this.logger.debug(`Retrieved portfolio tickers`, {
+        portfolioTickers: portfolioTickers.sort(),
+        count: portfolioTickers.length,
+        source: "Current portfolio positions",
+      });
+    } else {
+      this.logger.debug("No portfolio positions found", {
+        note: "Will proceed with base tickers only",
+      });
     }
 
     // Add benchmark and micro-cap biotech tickers
@@ -141,41 +159,103 @@ class MarketDataService {
     ];
 
     tickers.push(...baseTickers);
+    this.logger.debug(`Added base tickers`, {
+      baseTickers: baseTickers.sort(),
+      count: baseTickers.length,
+      categories: {
+        benchmarks: ["SPY", "IWO", "XBI", "IWM"],
+        microCapBiotech: [
+          "OCUP",
+          "BPTH",
+          "BXRX",
+          "PDSB",
+          "VTVT",
+          "INMB",
+          "CDTX",
+          "MBRX",
+          "SNGX",
+          "TNXP",
+        ],
+      },
+    });
 
-    // Add AI-discovered tickers from recent research
+    // Add top-ranked tickers from latest ranking (prioritized over AI discoveries)
     try {
-      const discoveredTickers = await this.getDiscoveredTickers();
-      if (discoveredTickers.length > 0) {
-        // Filter out duplicates and add new discoveries
-        const newTickers = discoveredTickers.filter(
+      const aiMemoryService = new (require("../ai-memory-service"))();
+      const rankedTickers = await aiMemoryService.getTopRankedTickers(50); // Top 50 ranked
+
+      if (rankedTickers.length > 0) {
+        // Filter out duplicates and add ranked tickers
+        const newRankedTickers = rankedTickers.filter(
           (ticker) => !tickers.includes(ticker)
         );
-        if (newTickers.length > 0) {
-          tickers.push(...newTickers);
+
+        if (newRankedTickers.length > 0) {
+          tickers.push(...newRankedTickers);
           this.logger.info(
-            `Added ${newTickers.length} AI-discovered tickers to market data fetch`,
+            `Added ${newRankedTickers.length} top-ranked tickers to market data fetch`,
             {
-              newTickers,
+              newRankedTickers: newRankedTickers.slice(0, 10).sort(), // Show first 10
+              totalRankedAdded: newRankedTickers.length,
               totalTickers: tickers.length,
+              source: "Latest ranked universe snapshot",
             }
           );
+        }
+      } else {
+        // Fallback to AI-discovered tickers if no ranking available
+        this.logger.debug(
+          "No ranked universe available, trying AI discoveries"
+        );
+        const discoveredTickers = await this.getDiscoveredTickers();
+        if (discoveredTickers.length > 0) {
+          const newTickers = discoveredTickers.filter(
+            (ticker) => !tickers.includes(ticker)
+          );
+          if (newTickers.length > 0) {
+            tickers.push(...newTickers);
+            this.logger.info(
+              `Added ${newTickers.length} AI-discovered tickers to market data fetch`,
+              {
+                newTickers: newTickers.sort(),
+                totalTickers: tickers.length,
+                source: "Recent AI research discoveries (fallback)",
+              }
+            );
+          }
         }
       }
     } catch (error) {
       this.logger.warn(
-        "Failed to add discovered tickers to market data fetch",
+        "Failed to add ranked/discovered tickers to market data fetch",
         error.message
       );
-      // Continue with base tickers if discovery fails
+      // Continue with base tickers only
     }
 
+    // Enhanced logging with detailed ticker breakdown
+    const portfolioTickers =
+      portfolio.positions?.map((pos) => pos.ticker) || [];
+    const discoveredTickersCount =
+      tickers.length - baseTickers.length - portfolioTickers.length;
+
     this.logger.info(`Fetching market data for ${tickers.length} tickers`, {
-      baseTickers: baseTickers.length,
-      portfolioTickers: portfolio.positions?.length || 0,
-      discoveredTickers:
-        tickers.length -
-        baseTickers.length -
-        (portfolio.positions?.length || 0),
+      breakdown: {
+        baseTickers: {
+          count: baseTickers.length,
+          tickers: baseTickers,
+        },
+        portfolioTickers: {
+          count: portfolioTickers.length,
+          tickers: portfolioTickers,
+        },
+        discoveredTickers: {
+          count: discoveredTickersCount,
+          source: "AI research discoveries",
+        },
+      },
+      totalUniqueTickers: tickers.length,
+      finalTickerList: tickers.sort(),
     });
 
     // Fetch data for all tickers concurrently
@@ -227,7 +307,7 @@ class MarketDataService {
 
       return { data };
     } catch (error) {
-      this.logger.debug(`Yahoo Finance failed for ${ticker}`, error.message);
+      this.logger.debug(`Yahoo Finance failed for ${ticker}: ${error.message}`);
       return null;
     }
   }
@@ -288,7 +368,7 @@ class MarketDataService {
 
       return { data };
     } catch (error) {
-      this.logger.debug(`Stooq failed for ${ticker}`, error.message);
+      this.logger.debug(`Stooq failed for ${ticker}: ${error.message}`);
       return null;
     }
   }

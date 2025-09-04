@@ -13,9 +13,8 @@ const requiredEnvVars = [
   "SES_REGION",
   "SES_SENDER_EMAIL",
   "ADMIN_EMAIL",
+  "FMP_API_KEY",
 ];
-
-const optionalEnvVars = ["EXECUTE_TRADES", "STARTING_CASH"];
 
 function validateEnvironment() {
   const missing = requiredEnvVars.filter((key) => !process.env[key]);
@@ -44,11 +43,29 @@ function getEnvConfig() {
     sesSenderEmail: process.env.SES_SENDER_EMAIL,
     adminEmail: process.env.ADMIN_EMAIL,
 
+    // FMP Configuration
+    fmpApiKey: process.env.FMP_API_KEY,
+
     // Execution flags
     executeTrades: process.env.EXECUTE_TRADES === "true",
 
     // Starting capital
     startingCash: parseFloat(process.env.STARTING_CASH) || 100.0,
+
+    // Discovery tunables (with defaults)
+    discovery: {
+      minPrice: parseFloat(process.env.UNIVERSE_MIN_PRICE) || 1.0,
+      minMarketCap: parseFloat(process.env.UNIVERSE_MIN_MARKET_CAP) || 50000000,
+      maxMarketCap:
+        parseFloat(process.env.UNIVERSE_MAX_MARKET_CAP) || 500000000,
+      minAdvUsd: parseFloat(process.env.UNIVERSE_MIN_ADV_USD) || 200000,
+      maxTickersPerRun:
+        parseInt(process.env.UNIVERSE_MAX_TICKERS_PER_RUN) || 150,
+      batchSize: parseInt(process.env.UNIVERSE_BATCH_SIZE) || 25,
+      maxConcurrency: parseInt(process.env.DISCOVERY_MAX_CONCURRENCY) || 4,
+      newsMaxItemsPerTicker:
+        parseInt(process.env.NEWS_MAX_ITEMS_PER_TICKER) || 5,
+    },
   };
 }
 

@@ -76,6 +76,7 @@ async function flushLogs() {
     console.warn(
       `Logger: Failed to send logs (${error.message}), falling back to console`
     );
+    console.warn(`Logging endpoint: ${loggingEndpoint}`);
     logsToSend.forEach((log) =>
       console.log(`[${log.level.toUpperCase()}]`, log.message, log)
     );

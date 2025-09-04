@@ -134,7 +134,7 @@ class PortfolioService {
           ":prefix": "TRADE#",
           ":cutoff": `TRADE#${cutoffIso}`,
         },
-        ScanIndexForward: false, // Most recent first
+        // Note: ScanIndexForward removed - query returns items in index order
       };
 
       const result = await this.dynamodb.query(params).promise();

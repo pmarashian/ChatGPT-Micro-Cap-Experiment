@@ -64,9 +64,9 @@ module.exports.logProcessor = async (event) => {
       ),
     ]);
 
-    console.log("Logs processed:", logs);
+    // console.log("Logs processed:", logs);
 
-    console.log(`Successfully processed ${logs.length} log entries`);
+    // console.log(`Successfully processed ${logs.length} log entries`);
   } catch (error) {
     console.error("Log processor error:", error.message);
   }
