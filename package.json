@@ -22,10 +22,12 @@
     "@logtail/node": "^0.5.6",
     "aws-sdk": "^2.1500.0",
     "axios": "^1.6.0",
+    "axios-retry": "^4.0.0",
     "csv-parser": "^3.0.0",
     "lodash": "^4.17.21",
     "moment": "^2.29.4",
     "openai": "^4.0.0",
+    "p-limit": "^5.0.0",
     "yahoo-finance2": "^2.13.3"
   },
   "devDependencies": {

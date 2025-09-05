@@ -1,13 +1,13 @@
 /**
  * Universe Service
- * Builds daily micro-cap biotech universe using FMP screener with Yahoo validation and ADV approximation
+ * Builds daily micro-cap biotech universe using FMP screener and ADV calculation
  */
 
-const axios = require("axios");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { getEnvConfig } = require("../../config/environment");
 const { DYNAMODB_TABLES, DISCOVERY_CONFIG } = require("../../config/constants");
+const FMPService = require("../fmp-service");
 
 class UniverseService {
   constructor() {
@@ -23,12 +23,8 @@ class UniverseService {
     this.tableName =
       process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;
 
-    // FMP API configuration
-    this.fmpBaseUrl = "https://financialmodelingprep.com/api/v3";
-    this.fmpApiKey = this.envConfig.fmpApiKey;
-
-    // Yahoo Finance for validation/ADV
-    this.yahooBaseUrl = "https://query1.finance.yahoo.com/v8/finance/chart/";
+    // FMP service
+    this.fmp = new FMPService();
 
     // Configuration defaults
     this.config = {
@@ -91,28 +87,21 @@ class UniverseService {
         `Applied filters: ${filteredData.length} companies remaining`
       );
 
-      // Step 3: Validate tickers with Yahoo Finance
-      const validatedData = await this.validateTickers(filteredData);
-
-      this.logger.info(
-        `Validated tickers: ${validatedData.length} valid companies`
-      );
-
-      // Step 4: Calculate ADV approximation using Yahoo data
-      const advData = await this.calculateADV(validatedData);
+      // Step 3: Calculate ADV using FMP data
+      const advData = await this.calculateADV(filteredData);
 
       this.logger.info(`Calculated ADV for ${advData.length} companies`);
 
-      // Step 5: Apply ADV filter
+      // Step 4: Apply ADV filter
       const finalUniverse = this.applyADVFilter(advData);
       this.logger.info(
         `Applied ADV filter: ${finalUniverse.length} companies in final universe`
       );
 
-      // Step 6: Create universe snapshot
+      // Step 5: Create universe snapshot
       const universeSnapshot = this.createUniverseSnapshot(finalUniverse);
 
-      // Step 7: Persist to DynamoDB
+      // Step 6: Persist to DynamoDB
       await this.persistUniverseSnapshot(universeSnapshot);
 
       this.logger.info("Universe build completed successfully", {
@@ -132,31 +121,18 @@ class UniverseService {
    */
   async fetchFMPScreener() {
     try {
-      // Use stock-screener endpoint now that we have Starter plan access
-      const url = `${this.fmpBaseUrl}/stock-screener?apikey=${this.fmpApiKey}&marketCapLowerThan=${this.config.maxMarketCap}&marketCapMoreThan=${this.config.minMarketCap}&priceMoreThan=${this.config.minPrice}&limit=10000`;
+      const params = {
+        marketCapLowerThan: this.config.maxMarketCap,
+        marketCapMoreThan: this.config.minMarketCap,
+        priceMoreThan: this.config.minPrice,
+        limit: 10000,
+      };
 
-      this.logger.info("Fetching stock screener data from FMP (Starter plan)", {
-        url: url.replace(this.fmpApiKey, "[REDACTED]"),
-        filters: {
-          minPrice: this.config.minPrice,
-          minMarketCap: this.config.minMarketCap,
-          maxMarketCap: this.config.maxMarketCap,
-        },
+      this.logger.info("Fetching stock screener data from FMP", {
+        filters: params,
       });
 
-      const response = await axios.get(url, {
-        timeout: 30000,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-      });
-
-      if (!response.data || !Array.isArray(response.data)) {
-        throw new Error("Invalid response from FMP screener");
-      }
-
-      return response.data;
+      return await this.fmp.screener(params);
     } catch (error) {
       this.logger.error("Failed to fetch FMP screener data", error);
       throw new Error(`FMP screener fetch error: ${error.message}`);
@@ -205,85 +181,7 @@ class UniverseService {
   }
 
   /**
-   * Validate tickers using Yahoo Finance
-   */
-  async validateTickers(companies) {
-    const validatedCompanies = [];
-    const batches = this.createBatches(companies, this.config.batchSize);
-
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      this.logger.debug(
-        `Processing validation batch ${i + 1}/${batches.length} (${
-          batch.length
-        } tickers)`
-      );
-
-      const batchPromises = batch.map(async (company) => {
-        try {
-          const isValid = await this.validateTickerWithYahoo(company.symbol);
-          if (isValid) {
-            validatedCompanies.push(company);
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to validate ${company.symbol}: ${error.message}`
-          );
-          // Skip invalid tickers but continue
-        }
-      });
-
-      await Promise.allSettled(batchPromises);
-
-      // Small delay between batches to be respectful
-      if (i < batches.length - 1) {
-        await this.sleep(100);
-      }
-    }
-
-    // Remove duplicates based on symbol
-    const uniqueCompanies = this.removeDuplicates(validatedCompanies, "symbol");
-
-    return uniqueCompanies;
-  }
-
-  /**
-   * Validate single ticker with Yahoo Finance
-   */
-  async validateTickerWithYahoo(symbol) {
-    try {
-      const url = `${this.yahooBaseUrl}${symbol}?range=1d&interval=1d&includePrePost=false`;
-
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-      });
-
-      // Check if we got valid data
-      if (
-        response.data &&
-        response.data.chart &&
-        response.data.chart.result &&
-        response.data.chart.result[0] &&
-        response.data.chart.result[0].meta
-      ) {
-        return true;
-      }
-
-      return false;
-    } catch (error) {
-      this.logger.debug(
-        `Yahoo validation failed for ${symbol}: ${error.message}`
-      );
-      return false;
-    }
-  }
-
-  /**
-   * Calculate ADV approximation using Yahoo Finance 20-day data
+   * Calculate ADV using FMP historical data
    */
   async calculateADV(companies) {
     const advCompanies = [];
@@ -334,47 +232,23 @@ class UniverseService {
   }
 
   /**
-   * Calculate ADV for single ticker using Yahoo 20-day data
+   * Calculate ADV for single ticker using FMP historical data
    */
   async calculateTickerADV(symbol) {
     try {
-      const url = `${this.yahooBaseUrl}${symbol}?range=1mo&interval=1d&includePrePost=false`;
+      const bars = await this.fmp.historicals(symbol, { timeseries: 30 });
 
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-      });
-
-      if (
-        !response.data ||
-        !response.data.chart ||
-        !response.data.chart.result ||
-        !response.data.chart.result[0]
-      ) {
-        throw new Error("Invalid Yahoo response");
+      if (!bars || bars.length === 0) {
+        throw new Error("No historical data available");
       }
 
-      const result = response.data.chart.result[0];
-      const quotes = result.indicators.quote[0];
+      // Get last 20 trading days (most recent)
+      const recentBars = bars.slice(-20);
 
-      if (!quotes || !quotes.close || !quotes.volume) {
-        throw new Error("No quote data available");
-      }
-
-      // Get last 20 trading days
-      const closes = quotes.close.slice(-20);
-      const volumes = quotes.volume.slice(-20);
-
-      // Calculate average volume
-      const validData = closes
-        .map((close, i) => ({
-          close: close,
-          volume: volumes[i],
-        }))
-        .filter((d) => d.close && d.volume && d.close > 0 && d.volume > 0);
+      // Calculate average volume and price
+      const validData = recentBars.filter(
+        (bar) => bar.close && bar.volume && bar.close > 0 && bar.volume > 0
+      );
 
       if (validData.length < 5) {
         // Need at least 5 days of data
@@ -382,18 +256,18 @@ class UniverseService {
       }
 
       const avgVolume =
-        validData.reduce((sum, d) => sum + d.volume, 0) / validData.length;
+        validData.reduce((sum, bar) => sum + bar.volume, 0) / validData.length;
       const avgPrice =
-        validData.reduce((sum, d) => sum + d.close, 0) / validData.length;
+        validData.reduce((sum, bar) => sum + bar.close, 0) / validData.length;
 
       // ADV = average volume × average price
       const adv = avgVolume * avgPrice;
 
       return Math.round(adv * 100) / 100; // Round to 2 decimal places
     } catch (error) {
-      this.logger.debug(
-        `ADV calculation failed for ${symbol}: ${error.message}`
-      );
+      // this.logger.debug(
+      //   `ADV calculation failed for ${symbol}: ${error.message}`
+      // );
       return null;
     }
   }
