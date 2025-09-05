@@ -32,6 +32,7 @@ custom:
       - UNIVERSE_BATCH_SIZE
       - DISCOVERY_MAX_CONCURRENCY
       - NEWS_MAX_ITEMS_PER_TICKER
+      - ENABLE_AI_HUMAN_REPORTS
   serverless-offline:
     httpPort: 3000
     lambdaPort: 3002
@@ -54,6 +55,8 @@ provider:
             - dynamodb:Scan
           Resource:
             - arn:aws:dynamodb:${self:provider.region}:*:table/${self:service}-${opt:stage, self:provider.stage}
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:service}-${opt:stage, self:provider.stage}/index/TickerIndex
+
         - Effect: Allow
           Action:
             - ses:SendEmail
@@ -110,6 +113,7 @@ provider:
     UNIVERSE_BATCH_SIZE: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_BATCH_SIZE}
     DISCOVERY_MAX_CONCURRENCY: ${file(.env.${opt:stage, 'dev'}.json):DISCOVERY_MAX_CONCURRENCY}
     NEWS_MAX_ITEMS_PER_TICKER: ${file(.env.${opt:stage, 'dev'}.json):NEWS_MAX_ITEMS_PER_TICKER}
+    ENABLE_AI_HUMAN_REPORTS: ${file(.env.${opt:stage, 'dev'}.json):ENABLE_AI_HUMAN_REPORTS}
 
 functions:
   # ============================================================================
@@ -139,7 +143,7 @@ functions:
     handler: src/handlers/scheduled/daily-trading.handler
     timeout: 180 # 3 minutes for trading decisions
     events:
-      - schedule: cron(0 21 * * ? *) # 4 PM ET (9 PM UTC) - Market close timing
+      - schedule: cron(0 20 * * ? *) # 4 PM ET (9 PM UTC) - Market close timing
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
@@ -151,7 +155,7 @@ functions:
   portfolioUpdate:
     handler: src/handlers/scheduled/portfolio-update.handler
     events:
-      - schedule: cron(0 21 * * ? *) # 4:30 PM ET (9:30 PM UTC) - After market close
+      - schedule: cron(30 20 * * ? *) # 4:30 PM ET (9:30 PM UTC) - After market close
 
   # Stop Loss Monitoring - Production
   # Monitors positions and executes stop-loss orders to limit losses
@@ -174,7 +178,15 @@ functions:
   emailReport:
     handler: src/handlers/scheduled/email-report.handler
     events:
-      - schedule: cron(0 21 * * ? *) # 4:30 PM ET (9:30 PM UTC) - End of day report
+      - schedule: cron(30 20 * * ? *) # 4:30 PM ET (9:30 PM UTC) - End of day report
+
+  # Weekly AI Report - Production
+  # Sends a weekly human-readable AI report
+  weeklyAIReport:
+    handler: src/handlers/scheduled/weekly-ai-report.handler
+    timeout: 120
+    events:
+      - schedule: cron(30 20 ? * SUN *) # Sundays 4:30 PM ET (9:30 PM UTC)
 
   # Order Status Monitoring - Production
   # Monitors pending orders and handles order status updates
@@ -185,7 +197,7 @@ functions:
     timeout: 120 # 2 minutes for order monitoring
     events:
       - schedule: cron(0 15 * * ? *) # 11 AM ET (3 PM UTC) - Mid-morning check
-      - schedule: cron(0 19 * * ? *) # 2 PM ET (7 PM UTC) - Mid-afternoon check
+      - schedule: cron(0 18 * * ? *) # 2 PM ET (7 PM UTC) - Mid-afternoon check
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
@@ -224,6 +236,22 @@ functions:
           path: /api/ranked-universe
           method: get
           cors: true
+
+  # Get Universe Screening Inputs - Production
+  # Returns FMP profile-derived fields and evaluation for a single ticker
+  # Useful for debugging why a ticker is or isn't in the universe
+  getUniverseScreening:
+    handler: src/handlers/api/get-universe-screening.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/universe-screening
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                ticker: true
 
   # Get Evidence Data - Production
   # Retrieves fundamentals, news, and research data for specific tickers
@@ -300,6 +328,17 @@ functions:
           method: get
           cors: true
 
+  # Sync Broker Portfolio - Production
+  # Reconciles DynamoDB portfolio with Alpaca account and positions
+  syncBrokerPortfolio:
+    handler: src/handlers/api/sync-broker-portfolio.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/sync-broker-portfolio
+          method: post
+          cors: true
+
   # Get Trading History - Production
   # Returns historical trades, orders, and transaction records
   # Used for performance analysis and audit trails
@@ -358,7 +397,7 @@ functions:
     timeout: 30
     events:
       - http:
-          path: /api/trigger-daily-trading
+          path: /api/trigger/daily-trading
           method: post
           cors: true
 
@@ -570,7 +609,7 @@ functions:
     handler: src/handlers/scheduled/universe-ranking.handler
     timeout: 300 # 5 minutes for ranking
     events:
-      - schedule: cron(0 2 * * ? *) # 7 AM ET (2 PM UTC) - After universe build, before research
+      - schedule: cron(0 4 * * ? *) # 4 AM ET (9 PM UTC) - After universe build, before research
 
 resources:
   Resources:

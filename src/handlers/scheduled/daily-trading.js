@@ -115,7 +115,10 @@ const baseHandler = async (event, context) => {
       }),
     };
   } catch (error) {
-    logger.error("Daily trading failed", error);
+    logger.error("Daily trading failed", {
+      error: error.message,
+    });
+
     await errorHandler.sendErrorAlert(error, { function: "daily-trading" });
 
     // Log function end with error

@@ -24,7 +24,8 @@ class EvidenceService {
 
     // Configuration
     this.config = {
-      fundamentalsStaleDays: 7,
+      // Use ingestion recency for fundamentals freshness
+      fundamentalsIngestionStaleDays: DISCOVERY_CONFIG.EVIDENCE_TTL_DAYS, // align with evidence TTL window
       newsStaleHours: 24,
       maxNewsItems:
         parseInt(process.env.NEWS_MAX_ITEMS_PER_TICKER) ||
@@ -41,7 +42,7 @@ class EvidenceService {
     try {
       this.logger.debug(`Building evidence bundle for ${ticker}`);
 
-      // Get latest valid fundamentals (≤7 days)
+      // Get latest fundamentals based on ingestion recency
       const fundamentals = await this.getLatestFundamentals(ticker);
 
       // Get recent news (≤24 hours)
@@ -180,8 +181,8 @@ class EvidenceService {
           ":ticker": ticker,
           ":type": "fundamentals",
         },
-        // Note: ScanIndexForward removed - query returns items in index order
-        Limit: 1,
+        // Sort by most recently ingested first
+        ScanIndexForward: false,
       };
 
       const result = await this.dynamodb.query(params).promise();
@@ -192,17 +193,19 @@ class EvidenceService {
 
       const fundamentals = result.Items[0];
 
-      // Check if fundamentals are stale (>7 days)
-      const asOfDate = new Date(fundamentals.asOfDate);
-      const daysOld = (Date.now() - asOfDate.getTime()) / (24 * 60 * 60 * 1000);
+      // Determine staleness by ingestion recency, not reporting asOfDate
+      const ingestedAt = new Date(fundamentals.publishedAt || fundamentals.SK);
+      const daysSinceIngestion =
+        (Date.now() - ingestedAt.getTime()) / (24 * 60 * 60 * 1000);
 
-      fundamentals.stale = daysOld > this.config.fundamentalsStaleDays;
-      fundamentals.recencyDays = Math.floor(daysOld);
+      fundamentals.stale =
+        daysSinceIngestion > this.config.fundamentalsIngestionStaleDays;
+      fundamentals.recencyDays = Math.floor(daysSinceIngestion);
 
       this.logger.debug(
-        `Fundamentals for ${ticker}: ${
+        `Fundamentals for ${ticker} (ingestion): ${
           fundamentals.stale ? "STALE" : "VALID"
-        } (${fundamentals.recencyDays} days old)`
+        } (${fundamentals.recencyDays} days since ingestion)`
       );
 
       return fundamentals.stale ? null : fundamentals;

@@ -47,11 +47,7 @@ class BrokerageService {
       );
 
       const orderData = this.buildOrderData(tradeOrder);
-      this.logger.debug("Order data being sent to Alpaca", orderData);
-      this.logger.debug(
-        "Full order data JSON",
-        JSON.stringify(orderData, null, 2)
-      );
+      this.logger.debug("Order data being sent to Alpaca", { orderData });
 
       const response = await this.client.post("/orders", orderData);
 

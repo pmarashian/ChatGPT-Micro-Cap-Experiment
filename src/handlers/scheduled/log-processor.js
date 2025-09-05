@@ -31,6 +31,11 @@ module.exports.logProcessor = async (event) => {
       return;
     }
 
+    if (isOffline) {
+      console.log(logs);
+      return;
+    }
+
     // Check if Logtail is properly initialized
     if (!process.env.LOGTAIL_API_KEY) {
       console.warn("LOGTAIL_API_KEY not set, skipping log transmission");

@@ -19,6 +19,7 @@ const ITEM_TYPES = {
   AI_DECISION: "ai_decision",
   MARKET_DATA: "market_data",
   PORTFOLIO_CONFIG: "portfolio_config",
+  AI_REPORT: "ai_report",
 };
 
 // Default benchmark tickers (same as Python script)

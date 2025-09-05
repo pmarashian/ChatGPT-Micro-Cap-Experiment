@@ -72,13 +72,6 @@ const baseHandler = async (event, context) => {
     // Log function end with error
     logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
 
-    // Force flush all remaining logs before throwing error
-    try {
-      await logger.flush();
-    } catch (flushError) {
-      // Silent fail - don't let flush errors mask the original error
-    }
-
     throw error;
   }
 };

@@ -5,6 +5,8 @@
  */
 
 const PortfolioService = require("../../services/portfolio-service");
+const AIService = require("../../services/ai-service");
+const ReportService = require("../../services/report-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const {
@@ -49,7 +51,7 @@ const baseHandler = async (event, context) => {
     logger.info("Fetching recent trading history");
     const recentTrades = await portfolioService.getTradingHistory(7);
 
-    // 3. Generate report content
+    // 3. Generate base report content
     const reportData = {
       date: new Date().toISOString().split("T")[0],
       portfolio,
@@ -57,7 +59,26 @@ const baseHandler = async (event, context) => {
       summary: generatePortfolioSummary(portfolio, recentTrades),
     };
 
-    const emailContent = generateEmailContent(reportData);
+    let emailContent = generateEmailContent(reportData);
+
+    // 3b. Optionally append AI human-readable report and persist
+    if (process.env.ENABLE_AI_HUMAN_REPORTS === "true") {
+      try {
+        const aiService = new AIService();
+        const { content: aiContent } = await aiService.getHumanReport({
+          period: "daily",
+          portfolio,
+          recentTrades,
+          persist: true,
+        });
+
+        emailContent += `\n\nAI ANALYSIS & RATIONALE\n${"-".repeat(
+          25
+        )}\n${aiContent}`;
+      } catch (e) {
+        logger.warn("AI human report generation failed", e);
+      }
+    }
 
     // 4. Send email
     logger.info("Sending email report");

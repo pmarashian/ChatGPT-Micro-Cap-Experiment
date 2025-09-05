@@ -79,24 +79,28 @@ class UniverseService {
 
       // Step 1: Get screener data from FMP
       const screenerData = await this.fetchFMPScreener();
+
       this.logger.info(
         `Fetched ${screenerData.length} companies from FMP screener`
       );
 
       // Step 2: Apply filters (sector, market cap, price, exchange)
       const filteredData = this.applyUniverseFilters(screenerData);
+
       this.logger.info(
         `Applied filters: ${filteredData.length} companies remaining`
       );
 
       // Step 3: Validate tickers with Yahoo Finance
       const validatedData = await this.validateTickers(filteredData);
+
       this.logger.info(
         `Validated tickers: ${validatedData.length} valid companies`
       );
 
       // Step 4: Calculate ADV approximation using Yahoo data
       const advData = await this.calculateADV(validatedData);
+
       this.logger.info(`Calculated ADV for ${advData.length} companies`);
 
       // Step 5: Apply ADV filter

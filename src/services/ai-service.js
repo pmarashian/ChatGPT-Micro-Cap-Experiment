@@ -12,12 +12,378 @@ const AIMemoryService = require("./ai-memory-service");
 const {
   SYSTEM_MESSAGE_TRADING,
   SYSTEM_MESSAGE_RESEARCH,
+  SYSTEM_MESSAGE_HUMAN_REPORT,
   buildTradingPrompt,
   buildResearchPrompt,
   formatPortfolioSnapshot,
   formatPerformanceMetrics,
   formatPositionSizing,
+  buildHumanReportPrompt,
 } = require("../config/prompts");
+const ReportService = require("./report-service");
+
+/**
+ * JSON Schema for trading response format
+ */
+const TRADING_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    version: {
+      type: "string",
+      description: "Response format version",
+    },
+    generatedAt: {
+      type: "string",
+      description: "Timestamp when response was generated",
+    },
+    researchSummary: {
+      type: "string",
+      description: "Brief summary of sector analysis and key findings",
+    },
+    decisions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          action: {
+            type: "string",
+            enum: ["BUY", "SELL", "HOLD", "RESEARCH"],
+            description: "Trading action to take",
+          },
+          ticker: {
+            type: "string",
+            description: "Stock ticker symbol",
+          },
+          shares: {
+            type: "number",
+            description: "Number of shares to trade",
+          },
+          orderType: {
+            type: "string",
+            enum: ["market", "limit"],
+            description: "Type of order",
+          },
+          limitPrice: {
+            type: "number",
+            description: "Limit price for limit orders",
+          },
+          timeInForce: {
+            type: "string",
+            enum: ["day", "gtc"],
+            description: "Time in force for the order",
+          },
+          stopLoss: {
+            type: "number",
+            description: "Stop loss price",
+          },
+          research: {
+            type: "string",
+            description: "Company analysis, pipeline, valuation, catalysts",
+          },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+            description: "Confidence level in the decision",
+          },
+          rationale: {
+            type: "string",
+            description: "Investment thesis and expected outcome",
+          },
+        },
+        required: [
+          "action",
+          "ticker",
+          "shares",
+          "orderType",
+          "timeInForce",
+          "research",
+          "confidence",
+          "rationale",
+          "limitPrice",
+          "stopLoss",
+        ],
+      },
+      description: "Array of trading decisions",
+    },
+    newDiscoveries: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ticker: {
+            type: "string",
+            description: "Stock ticker symbol",
+          },
+          companyName: {
+            type: "string",
+            description: "Full company name",
+          },
+          marketCap: {
+            type: "number",
+            description: "Market capitalization",
+          },
+          researchNotes: {
+            type: "string",
+            description: "Key findings and investment potential",
+          },
+          recommendedAction: {
+            type: "string",
+            enum: ["BUY", "HOLD", "MONITOR"],
+            description: "Recommended action",
+          },
+        },
+        required: [
+          "ticker",
+          "companyName",
+          "marketCap",
+          "researchNotes",
+          "recommendedAction",
+        ],
+      },
+      description: "Array of newly discovered companies",
+    },
+    portfolioStrategy: {
+      type: "string",
+      description: "Overall portfolio positioning and rebalancing plan",
+    },
+    riskAssessment: {
+      type: "string",
+      description: "Risk factors and mitigation strategies",
+    },
+    nextResearchFocus: {
+      type: "string",
+      description: "Areas for further investigation",
+    },
+  },
+  required: [
+    "version",
+    "generatedAt",
+    "researchSummary",
+    "decisions",
+    "newDiscoveries",
+    "portfolioStrategy",
+    "riskAssessment",
+    "nextResearchFocus",
+  ],
+};
+
+/**
+ * JSON Schema for research response format
+ */
+const RESEARCH_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    version: {
+      type: "string",
+      description: "Response format version",
+    },
+    generatedAt: {
+      type: "string",
+      description: "Timestamp when response was generated",
+    },
+    researchSummary: {
+      type: "string",
+      description: "Comprehensive sector analysis summary",
+    },
+    sectorAnalysis: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        overallSentiment: {
+          type: "string",
+          enum: ["bullish", "neutral", "bearish"],
+          description: "Overall market sentiment",
+        },
+        keyTrends: {
+          type: "array",
+          items: { type: "string" },
+          description: "Key trends identified in the sector",
+        },
+        riskFactors: {
+          type: "array",
+          items: { type: "string" },
+          description: "Risk factors affecting the sector",
+        },
+        opportunityAreas: {
+          type: "array",
+          items: { type: "string" },
+          description: "Areas with investment opportunities",
+        },
+      },
+      required: [
+        "overallSentiment",
+        "keyTrends",
+        "riskFactors",
+        "opportunityAreas",
+      ],
+    },
+    companyEvaluations: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ticker: {
+            type: "string",
+            description: "Stock ticker symbol",
+          },
+          companyName: {
+            type: "string",
+            description: "Full company name",
+          },
+          marketCap: {
+            type: "number",
+            description: "Market capitalization in USD",
+          },
+          sector: {
+            type: "string",
+            description:
+              "Therapeutic sector (oncology, neurology, cardiology, etc.)",
+          },
+          fundamentalAnalysis: {
+            type: "string",
+            description:
+              "Detailed analysis of pipeline, management, financials",
+          },
+          competitivePosition: {
+            type: "string",
+            description: "Market position and differentiation",
+          },
+          catalysts: {
+            type: "array",
+            items: { type: "string" },
+            description: "Key catalysts and expected timelines",
+          },
+          risks: {
+            type: "array",
+            items: { type: "string" },
+            description: "Risk factors specific to the company",
+          },
+          valuation: {
+            type: "string",
+            enum: ["undervalued", "fair", "overvalued"],
+            description: "Valuation assessment",
+          },
+          recommendation: {
+            type: "string",
+            enum: ["BUY", "MONITOR", "AVOID"],
+            description: "Investment recommendation",
+          },
+          convictionLevel: {
+            type: "string",
+            enum: ["high", "medium", "low"],
+            description: "Level of conviction in the analysis",
+          },
+          qualityScore: {
+            type: "number",
+            minimum: 0,
+            maximum: 100,
+            description: "Quality score out of 100",
+          },
+          researchNotes: {
+            type: "string",
+            description: "Key investment highlights and concerns",
+          },
+          citations: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                url: {
+                  type: "string",
+                  description: "Source URL",
+                },
+                source: {
+                  type: "string",
+                  description: "Source name (e.g., FMP, SEC, etc.)",
+                },
+                publishedAt: {
+                  type: "string",
+                  description: "Publication timestamp",
+                },
+                snippet: {
+                  type: "string",
+                  description: "Relevant text snippet from the source",
+                },
+              },
+              required: ["url", "source", "publishedAt", "snippet"],
+            },
+            minItems: 1,
+            description: "Required citations supporting the analysis",
+          },
+        },
+        required: [
+          "ticker",
+          "companyName",
+          "marketCap",
+          "sector",
+          "fundamentalAnalysis",
+          "competitivePosition",
+          "catalysts",
+          "risks",
+          "valuation",
+          "recommendation",
+          "convictionLevel",
+          "qualityScore",
+          "researchNotes",
+          "citations",
+        ],
+      },
+      description: "Array of company evaluations with analysis and citations",
+    },
+    newDiscoveries: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ticker: {
+            type: "string",
+            description: "Stock ticker symbol",
+          },
+          companyName: {
+            type: "string",
+            description: "Full company name",
+          },
+          discoveryReason: {
+            type: "string",
+            description: "Why this company is interesting",
+          },
+          initialAnalysis: {
+            type: "string",
+            description: "Preliminary assessment",
+          },
+        },
+        required: [
+          "ticker",
+          "companyName",
+          "discoveryReason",
+          "initialAnalysis",
+        ],
+      },
+      description: "Array of newly discovered companies",
+    },
+    nextResearchFocus: {
+      type: "string",
+      description: "Areas requiring further investigation",
+    },
+  },
+  required: [
+    "version",
+    "generatedAt",
+    "researchSummary",
+    "sectorAnalysis",
+    "companyEvaluations",
+    "newDiscoveries",
+    "nextResearchFocus",
+  ],
+};
 
 class AIService {
   constructor() {
@@ -26,11 +392,61 @@ class AIService {
     this.errorHandler = new ErrorHandler("ai-service");
     this.envConfig = getEnvConfig();
     this.memoryService = new AIMemoryService();
+    this.reportService = new ReportService();
 
     // Initialize OpenAI client
     this.client = new OpenAI({
       apiKey: this.envConfig.aiApiKey,
     });
+  }
+
+  /**
+   * Generate a human-readable AI report (daily/weekly) and optionally persist
+   * @param {Object} params
+   * @param {"daily"|"weekly"} params.period
+   * @param {Object} params.portfolio
+   * @param {Array} params.recentTrades
+   * @param {boolean} [params.persist=true] - Save to DynamoDB
+   * @returns {Promise<{subject:string, content:string}>}
+   */
+  async getHumanReport({ period, portfolio, recentTrades, persist = true }) {
+    const aiContext = await this.memoryService.buildAIContext();
+    const prompt = buildHumanReportPrompt({
+      period,
+      portfolio,
+      recentTrades,
+      aiContext,
+      metrics: {},
+    });
+
+    const content = await this.callOpenAIWithSystem(
+      prompt,
+      SYSTEM_MESSAGE_HUMAN_REPORT,
+      1200
+    );
+
+    const dateStr = new Date().toISOString().split("T")[0];
+    const subject = `AI ${
+      period === "weekly" ? "Weekly" : "Daily"
+    } Report — ${dateStr}`;
+
+    if (persist) {
+      try {
+        await this.reportService.saveReport({
+          period,
+          subject,
+          content,
+          metadata: {
+            positions: portfolio.positions?.length || 0,
+            trades: recentTrades?.length || 0,
+          },
+        });
+      } catch (e) {
+        this.logger.warn("Failed to persist AI report", e);
+      }
+    }
+
+    return { subject, content };
   }
 
   /**
@@ -54,15 +470,18 @@ class AIService {
         marketData,
         aiContext
       );
-      this.logger.info("🔍 PROMPT:", prompt);
-      const response = await this.callOpenAI(prompt, false); // false for trading decisions
-      this.logger.info("🔍 RAW AI RESPONSE:", response);
-      this.logger.debug("Raw AI response length", response.length);
+
+      this.logger.info("🔍 PROMPT:", { prompt });
+
+      const response = await this.callOpenAI(prompt, false, true); // false for trading decisions
+
+      this.logger.info("🔍 RAW AI RESPONSE:", { response });
+
       const parsedResponse = this.parseTradingDecision(response);
 
       // TEMPORARILY DISABLE VALIDATION TO DEBUG
-      // this.validators.validateAiDecisionResponse(parsedResponse);
-      this.logger.info("🔍 PARSED RESPONSE:", parsedResponse);
+      this.validators.validateAiDecisionResponse(parsedResponse);
+      this.logger.info("🔍 PARSED RESPONSE:", { parsedResponse });
 
       // Save AI research and decisions to memory
       try {
@@ -537,11 +956,34 @@ Please revise your analysis to include proper citations for ALL evaluated compan
   /**
    * Call OpenAI API
    */
-  async callOpenAI(prompt, isResearch = false) {
+  async callOpenAI(prompt, isResearch = false, isTrading = false) {
     try {
-      const systemMessage = isResearch
-        ? SYSTEM_MESSAGE_RESEARCH
-        : SYSTEM_MESSAGE_TRADING;
+      let systemMessage = SYSTEM_MESSAGE_RESEARCH;
+
+      if (isTrading) {
+        systemMessage = SYSTEM_MESSAGE_TRADING;
+      }
+
+      // Use JSON schema for both research and trading calls
+      const responseFormat = isResearch
+        ? {
+            type: "json_schema",
+            json_schema: {
+              name: "research_response",
+              schema: RESEARCH_RESPONSE_SCHEMA,
+              strict: true,
+            },
+          }
+        : isTrading
+        ? {
+            type: "json_schema",
+            json_schema: {
+              name: "trading_response",
+              schema: TRADING_RESPONSE_SCHEMA,
+              strict: true,
+            },
+          }
+        : { type: "json_object" };
 
       const response = await this.client.chat.completions.create({
         model: this.envConfig.aiModel,
@@ -556,13 +998,34 @@ Please revise your analysis to include proper citations for ALL evaluated compan
           },
         ],
         temperature: 0.1,
-        max_tokens: 2000,
-        response_format: { type: "json_object" },
+        // max_tokens: 2000,
+        response_format: responseFormat,
       });
 
       return response.choices[0].message.content;
     } catch (error) {
       this.logger.error("OpenAI API call failed", error);
+      throw new Error(`OpenAI API error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Call OpenAI with explicit system message and token cap
+   */
+  async callOpenAIWithSystem(prompt, systemMessage, maxTokens = 1200) {
+    try {
+      const response = await this.client.chat.completions.create({
+        model: this.envConfig.aiModel,
+        messages: [
+          { role: "system", content: systemMessage },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.1,
+        max_tokens: maxTokens,
+      });
+      return response.choices[0].message.content;
+    } catch (error) {
+      this.logger.error("OpenAI API call (human report) failed", error);
       throw new Error(`OpenAI API error: ${error.message}`);
     }
   }
@@ -660,56 +1123,39 @@ Please revise your analysis to include proper citations for ALL evaluated compan
     lines.push(`Ticker            Close     % Chg          Volume`);
     lines.push(`-------------------------------------------------`);
 
-    // Process each ticker's market data
-    // Include benchmarks + micro-cap biotech universe
-    const tickers = [
-      // Benchmarks
-      "SPY",
-      "IWO",
-      "XBI",
-      "IWM",
-      // Micro-cap biotech stocks (examples - AI can research more)
-      "OCUP",
-      "BPTH",
-      "BXRX",
-      "PDSB",
-      "VTVT",
-      "INMB",
-      "CDTX",
-      "MBRX",
-      "SNGX",
-      "BXRX",
-      "TNXP",
-      "BXRX",
-      "BXRX",
-      "BXRX",
-      "BXRX",
-      "BXRX",
-    ];
+    // Extract tickers from marketData object (includes portfolio + base + ranked tickers)
+    const tickers = Object.keys(marketData).sort();
 
     tickers.forEach((ticker) => {
       const data = marketData[ticker];
+      const tickerStr = ticker.padEnd(16);
 
       if (data && data.data && data.data.length > 0) {
         const latest = data.data[data.data.length - 1];
 
         // Get current price
         const close = latest.close || latest.price || 0;
-        this.logger.debug(`Using REAL market data for ${ticker}`, {
-          source: data.source,
-          close,
-          date: latest.date,
-          volume: latest.volume,
-        });
+        // this.logger.debug(`Using REAL market data for ${ticker}`, {
+        //   source: data.source,
+        //   close,
+        //   date: latest.date,
+        //   volume: latest.volume,
+        // });
 
-        // Calculate % change (simplified - would need previous day's data for accuracy)
-        const changePercent = latest.changePercent || 0;
+        // Calculate % change using previous day's data
+        let changePercent = 0;
+        if (data.data.length > 1) {
+          const previous = data.data[data.data.length - 2];
+          const previousClose = previous.close || previous.price || 0;
+          if (previousClose > 0) {
+            changePercent = ((close - previousClose) / previousClose) * 100;
+          }
+        }
 
         // Get volume
         const volume = latest.volume || 0;
 
         // Format the line
-        const tickerStr = ticker.padEnd(16);
         const closeStr = close.toFixed(2).padStart(8);
         const changeStr = `${
           changePercent >= 0 ? "+" : ""
@@ -718,29 +1164,12 @@ Please revise your analysis to include proper citations for ALL evaluated compan
 
         lines.push(`${tickerStr}${closeStr}${changeStr}${volumeStr}`);
       } else {
-        // Fallback for missing data
-        const fallbackPrices = {
-          SPY: 450.25,
-          IWO: 280.45,
-          XBI: 85.32,
-          IWM: 210.18,
-        };
+        const close = 0;
+        const changePercent = 0;
+        const volume = 0;
 
-        const close = fallbackPrices[ticker] || 0;
-        const changePercent = ticker === "XBI" ? -0.45 : Math.random() * 4 - 2; // Random change
-        const volume = Math.floor(Math.random() * 50000000) + 1000000;
-
-        this.logger.warn(`Using PLACEHOLDER data for ${ticker}`, {
-          fallbackPrice: close,
-          dataSource: data?.source || "no data",
-          dataLength: data?.data?.length || 0,
-        });
-
-        const tickerStr = ticker.padEnd(16);
         const closeStr = close.toFixed(2).padStart(8);
-        const changeStr = `${
-          changePercent >= 0 ? "+" : ""
-        }${changePercent.toFixed(2)}%`.padStart(8);
+        const changeStr = `${""}${changePercent.toFixed(2)}%`.padStart(8);
         const volumeStr = volume.toLocaleString().padStart(12);
 
         lines.push(`${tickerStr}${closeStr}${changeStr}${volumeStr}`);

@@ -11,6 +11,8 @@ const {
   invokeLambdaFunction,
 } = require("../../utils/lambda-client");
 
+const { withApiLogFlushing } = require("../../utils/handler-wrapper");
+
 let logger;
 let errorHandler;
 let lambda;
@@ -18,7 +20,7 @@ let lambda;
 /**
  * Lambda handler for manual daily trading trigger
  */
-module.exports.handler = async (event, context) => {
+const baseHandler = async (event, context) => {
   // Initialize services
   logger = new Logger("trigger-daily-trading");
   errorHandler = new ErrorHandler("trigger-daily-trading");
@@ -27,17 +29,6 @@ module.exports.handler = async (event, context) => {
   try {
     // Log function start
     logger.logLambdaStart(event, context);
-
-    // Debug environment variables
-    logger.info("🔍 DEBUG: Environment check", {
-      EXECUTE_TRADES: process.env.EXECUTE_TRADES,
-      EXECUTE_TRADES_type: typeof process.env.EXECUTE_TRADES,
-      EXECUTE_TRADES_length: process.env.EXECUTE_TRADES?.length,
-      all_env_keys: Object.keys(process.env).filter((key) =>
-        key.includes("EXECUTE")
-      ),
-      NODE_ENV: process.env.NODE_ENV,
-    });
 
     // Validate environment
     validateEnvironment();
@@ -86,3 +77,8 @@ module.exports.handler = async (event, context) => {
     return errorHandler.createErrorResponse(error);
   }
 };
+
+module.exports.handler = withApiLogFlushing(
+  baseHandler,
+  "trigger-daily-trading"
+);

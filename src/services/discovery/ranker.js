@@ -37,6 +37,7 @@ class RankerService {
 
       // Get latest universe
       const universe = await this.universeService.getLatestUniverse();
+
       if (!universe) {
         throw new Error("No universe snapshot available for ranking");
       }
@@ -48,6 +49,9 @@ class RankerService {
 
       // Compute scores for each ticker
       const tickerScores = [];
+
+      // universe.tickers = [{ symbol: "KMDA" }];
+
       for (const tickerObj of universe.tickers) {
         const tickerSymbol = tickerObj.symbol; // Extract the symbol from the ticker object
         try {
@@ -139,6 +143,7 @@ class RankerService {
     const fundamentalsScore = this.scoreFundamentals(
       evidenceBundle.fundamentals
     );
+
     const newsScore = this.scoreNews(evidenceBundle.news);
     const momentumScore = this.scoreMomentum(evidenceBundle);
     const riskPenalty = this.computeRiskPenalty(
@@ -193,13 +198,7 @@ class RankerService {
       return 0;
     }
 
-    // Check freshness
-    const ageDays =
-      (Date.now() - new Date(latest.asOfDate).getTime()) /
-      (1000 * 60 * 60 * 24);
-    if (ageDays > RANKING_CONFIG.FRESHNESS.MAX_FUNDAMENTALS_AGE_DAYS) {
-      return 10; // Low score for stale data
-    }
+    // Do not penalize for reporting period age; evidence gating uses ingestion recency
 
     let score = 50; // Base score
 

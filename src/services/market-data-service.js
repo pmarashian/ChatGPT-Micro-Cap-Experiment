@@ -66,18 +66,18 @@ class MarketDataService {
    */
   async getStockData(ticker, period = "1d") {
     try {
-      this.logger.debug(`Fetching data for ${ticker}`, { period });
+      // this.logger.debug(`Fetching data for ${ticker}`, { period });
 
       // Try Yahoo Finance first
       const yahooResult = await this.fetchYahooData(ticker, period);
       if (yahooResult && yahooResult.data && yahooResult.data.length > 0) {
         const latestPrice =
           yahooResult.data[yahooResult.data.length - 1]?.close;
-        this.logger.debug(`Successfully fetched ${ticker} from Yahoo Finance`, {
-          latestPrice,
-          dataPoints: yahooResult.data.length,
-          lastUpdated: yahooResult.data[yahooResult.data.length - 1]?.date,
-        });
+        // this.logger.debug(`Successfully fetched ${ticker} from Yahoo Finance`, {
+        //   latestPrice,
+        //   dataPoints: yahooResult.data.length,
+        //   lastUpdated: yahooResult.data[yahooResult.data.length - 1]?.date,
+        // });
         return {
           source: "yahoo",
           data: yahooResult.data,
@@ -86,15 +86,15 @@ class MarketDataService {
       }
 
       // Fallback to Stooq
-      this.logger.debug(`Yahoo Finance failed for ${ticker}, trying Stooq`);
+      // this.logger.debug(`Yahoo Finance failed for ${ticker}, trying Stooq`);
       const stooqResult = await this.fetchStooqData(ticker, period);
       if (stooqResult && stooqResult.data && stooqResult.data.length > 0) {
         const latestPrice =
           stooqResult.data[stooqResult.data.length - 1]?.close;
-        this.logger.debug(`Successfully fetched ${ticker} from Stooq`, {
-          latestPrice,
-          dataPoints: stooqResult.data.length,
-        });
+        // this.logger.debug(`Successfully fetched ${ticker} from Stooq`, {
+        //   latestPrice,
+        //   dataPoints: stooqResult.data.length,
+        // });
         return {
           source: "stooq",
           data: stooqResult.data,
@@ -159,29 +159,10 @@ class MarketDataService {
     ];
 
     tickers.push(...baseTickers);
-    this.logger.debug(`Added base tickers`, {
-      baseTickers: baseTickers.sort(),
-      count: baseTickers.length,
-      categories: {
-        benchmarks: ["SPY", "IWO", "XBI", "IWM"],
-        microCapBiotech: [
-          "OCUP",
-          "BPTH",
-          "BXRX",
-          "PDSB",
-          "VTVT",
-          "INMB",
-          "CDTX",
-          "MBRX",
-          "SNGX",
-          "TNXP",
-        ],
-      },
-    });
 
     // Add top-ranked tickers from latest ranking (prioritized over AI discoveries)
     try {
-      const aiMemoryService = new (require("../ai-memory-service"))();
+      const aiMemoryService = new (require("./ai-memory-service"))();
       const rankedTickers = await aiMemoryService.getTopRankedTickers(50); // Top 50 ranked
 
       if (rankedTickers.length > 0) {
@@ -227,8 +208,8 @@ class MarketDataService {
       }
     } catch (error) {
       this.logger.warn(
-        "Failed to add ranked/discovered tickers to market data fetch",
-        error.message
+        `Failed to add ranked/discovered tickers to market data fetch: ${error.message}`,
+        { message: error.message }
       );
       // Continue with base tickers only
     }
@@ -236,6 +217,7 @@ class MarketDataService {
     // Enhanced logging with detailed ticker breakdown
     const portfolioTickers =
       portfolio.positions?.map((pos) => pos.ticker) || [];
+
     const discoveredTickersCount =
       tickers.length - baseTickers.length - portfolioTickers.length;
 
@@ -268,7 +250,7 @@ class MarketDataService {
       if (result.status === "fulfilled") {
         marketData[ticker] = result.value;
       } else {
-        this.logger.warn(`Failed to fetch data for ${ticker}`, result.reason);
+        // this.logger.warn(`Failed to fetch data for ${ticker}`, result.reason);
         marketData[ticker] = {
           source: "error",
           data: [],
@@ -307,7 +289,7 @@ class MarketDataService {
 
       return { data };
     } catch (error) {
-      this.logger.debug(`Yahoo Finance failed for ${ticker}: ${error.message}`);
+      // this.logger.debug(`Yahoo Finance failed for ${ticker}: ${error.message}`);
       return null;
     }
   }

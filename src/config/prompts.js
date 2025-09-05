@@ -16,6 +16,12 @@ const SYSTEM_MESSAGE_RESEARCH =
   "You are an expert micro-cap biotech research analyst specializing in comprehensive sector analysis and investment opportunity identification. Focus on fundamental analysis, pipeline development, and market positioning.";
 
 /**
+ * System message for human-readable reports
+ */
+const SYSTEM_MESSAGE_HUMAN_REPORT =
+  "You are a reporting analyst writing concise, human-readable summaries of trading activity and rationale. Use clear headings and bullet points. Avoid speculation; base on provided inputs only.";
+
+/**
  * Trading decision prompt template
  * @param {string} today - Today's date (YYYY-MM-DD)
  * @param {string} portfolioSnapshot - Formatted portfolio snapshot
@@ -76,8 +82,6 @@ PORTFOLIO OPTIMIZATION:
 - Maintain diversification across therapeutic areas
 
 You have access to comprehensive research data and should use it to make informed trading decisions. Focus on execution rather than research at this stage.
-
-*Paste everything above into ChatGPT*
 
 Based on your research and analysis, provide your portfolio management decisions in the following strict JSON format:
 
@@ -216,7 +220,7 @@ Based on your analysis, provide comprehensive research findings in the following
  */
 function formatPortfolioSnapshot(portfolioData) {
   return `[ Snapshot ]
-Latest ChatGPT Equity: $${portfolioData.totalValue?.toFixed(2) || "0.00"}
+Latest Portfolio Equity: $${portfolioData.totalValue?.toFixed(2) || "0.00"}
 Cash Balance: $${portfolioData.cash?.toFixed(2) || "0.00"}`;
 }
 
@@ -311,6 +315,7 @@ function formatPositionSizing(portfolioData, marketData) {
 module.exports = {
   SYSTEM_MESSAGE_TRADING,
   SYSTEM_MESSAGE_RESEARCH,
+  SYSTEM_MESSAGE_HUMAN_REPORT,
   buildTradingPrompt,
   buildResearchPrompt,
   formatPortfolioSnapshot,

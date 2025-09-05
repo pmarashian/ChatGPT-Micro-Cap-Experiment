@@ -11,6 +11,7 @@ const {
   ITEM_TYPES,
   DYNAMODB_TABLES,
   PORTFOLIO_CONFIG,
+  DISCOVERY_CONFIG,
 } = require("../config/constants");
 const { getEnvConfig } = require("../config/environment");
 
@@ -34,6 +35,7 @@ class AIMemoryService {
    * @param {Object} researchData - AI research findings
    */
   async saveAIResearch(researchData) {
+    console.log("saveAIResearch", researchData);
     try {
       const timestamp = researchData.generatedAt || new Date().toISOString();
 
@@ -182,10 +184,10 @@ class AIMemoryService {
       // Save individual ticker market data items for queryability
       await this.saveTickerMarketDataItems(marketData);
 
-      this.logger.debug("Market data cached", {
-        tickerCount: Object.keys(marketData).length,
-        cacheExpiry: PORTFOLIO_CONFIG.MARKET_DATA_CACHE.TTL_MINUTES,
-      });
+      // this.logger.debug("Market data cached", {
+      //   tickerCount: Object.keys(marketData).length,
+      //   cacheExpiry: PORTFOLIO_CONFIG.MARKET_DATA_CACHE.TTL_MINUTES,
+      // });
 
       return marketDataItem;
     } catch (error) {
@@ -1054,6 +1056,7 @@ class AIMemoryService {
    * @returns {Promise<Object>} Evidence bundle or null
    */
   async getEvidenceBundle(ticker) {
+    // console.log("getEvidenceBundle", ticker);
     try {
       const params = {
         TableName: this.tableName,
@@ -1064,10 +1067,15 @@ class AIMemoryService {
           ":ticker": ticker,
           ":prefix": "evidence#",
         },
-        // Note: ScanIndexForward removed - query will return items in index order
+        // Sort by newest ingested first
+        ScanIndexForward: false,
       };
 
+      // console.log("params", params);
+
       const result = await this.dynamodb.query(params).promise();
+
+      // console.log("result", result);
 
       if (!result.Items || result.Items.length === 0) {
         return null;
@@ -1077,18 +1085,30 @@ class AIMemoryService {
       const fundamentals = result.Items.filter(
         (item) => item.type === "fundamentals"
       );
+
       const news = result.Items.filter((item) => item.type === "news");
 
-      // Get latest fundamentals (if not stale)
+      // console.log("fundamentals", fundamentals);
+      // console.log("news", news);
+
+      // Get latest fundamentals by ingestion recency
       const latestFundamentals =
         fundamentals.length > 0 ? fundamentals[0] : null;
+
+      // Gate by ingestion recency (publishedAt/SK), not reporting asOfDate
+      const ingestionDate = latestFundamentals
+        ? new Date(latestFundamentals.publishedAt || latestFundamentals.SK)
+        : null;
+
       const fundamentalsStale =
-        latestFundamentals &&
-        Date.now() - new Date(latestFundamentals.asOfDate).getTime() >
-          7 * 24 * 60 * 60 * 1000;
+        !latestFundamentals ||
+        (ingestionDate &&
+          Date.now() - ingestionDate.getTime() >
+            DISCOVERY_CONFIG.EVIDENCE_TTL_DAYS * 24 * 60 * 60 * 1000);
 
       // Get recent news (last 24 hours, not stale)
       const cutoffTime = Date.now() - 24 * 60 * 60 * 1000;
+
       const recentNews = news
         .filter(
           (item) =>
@@ -1103,16 +1123,18 @@ class AIMemoryService {
 
       const bundle = {
         ticker: ticker,
-        fundamentals: {
-          asOfDate: latestFundamentals.asOfDate,
-          marketCap: latestFundamentals.structured?.marketCap,
-          sharesOutstanding: latestFundamentals.structured?.sharesOutstanding,
-          cash: latestFundamentals.structured?.cashAndCashEquivalents,
-          totalDebt: latestFundamentals.structured?.totalDebt,
-          operatingCashFlow: latestFundamentals.structured?.operatingCashFlow,
-          revenue: latestFundamentals.structured?.revenue,
-          runwayMonths: latestFundamentals.structured?.runwayMonths,
-        },
+        fundamentals: [
+          {
+            asOfDate: latestFundamentals.asOfDate,
+            marketCap: latestFundamentals.structured?.marketCap,
+            sharesOutstanding: latestFundamentals.structured?.sharesOutstanding,
+            cash: latestFundamentals.structured?.cashAndCashEquivalents,
+            totalDebt: latestFundamentals.structured?.totalDebt,
+            operatingCashFlow: latestFundamentals.structured?.operatingCashFlow,
+            revenue: latestFundamentals.structured?.revenue,
+            runwayMonths: latestFundamentals.structured?.runwayMonths,
+          },
+        ],
         news: recentNews.map((item) => ({
           headline: item.headline,
           snippet: item.snippet,
@@ -1365,6 +1387,7 @@ class AIMemoryService {
       // Add quality and performance summary if we have discoveries
       try {
         const allDiscoveries = await this.getDiscoveredTickersWithQuality();
+
         if (allDiscoveries.length > 0) {
           const investedDiscoveries = allDiscoveries.filter((d) => d.invested);
           const successfulInvestments = allDiscoveries.filter(
