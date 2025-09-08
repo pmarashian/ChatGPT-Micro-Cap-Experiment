@@ -1,3 +1,9 @@
+---
+description: "Quick reference guide for job orchestration patterns, debugging, and common cron expressions"
+globs:
+alwaysApply: false
+---
+
 # Job Orchestration Quick Reference
 
 ## Creating a New Scheduled Job

@@ -6,13 +6,25 @@
 
 const { validateEnvironment } = require("../../config/environment");
 const { withApiHandlerLifecycle } = require("../../utils/handler-wrapper");
-const { initializeJob } = require("../../services/job-orchestration-service");
+const {
+  initializeJob,
+  setOrchestrationEnabled,
+} = require("../../services/job-orchestration-service");
 
 /**
  * Business logic for initializing job orchestration
  */
 const businessLogic = async ({ logger, errorHandler }) => {
   logger.info("Initializing job orchestration system with all cron jobs");
+
+  // Initialize orchestration-enabled flag (default to true)
+  try {
+    await setOrchestrationEnabled(true, logger);
+    logger.info("Orchestration enabled flag initialized to true");
+  } catch (error) {
+    logger.error("Failed to initialize orchestration enabled flag", error);
+    // Continue with job initialization even if flag initialization fails
+  }
 
   // Define all cron jobs that replace serverless.yml schedules
   const jobConfigs = [
@@ -47,110 +59,79 @@ const businessLogic = async ({ logger, errorHandler }) => {
         "Computes composite scores for universe tickers based on evidence",
       enabled: true,
     },
-    // {
-    //   jobName: "marketResearch",
-    //   schedule: "0 1 * * ?", // 8 PM ET (1 AM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-marketResearch`,
-    //   maxRuntime: 600, // 10 minutes
-    //   invocationType: "scheduled",
-    //   description: "Generates deep AI analysis for high-potential tickers",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "dailyTrading",
-    //   schedule: "0 20 * * ?", // 4 PM ET (9 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-dailyTrading`,
-    //   maxRuntime: 180, // 3 minutes
-    //   invocationType: "scheduled",
-    //   description: "Makes automated buy/sell decisions based on AI analysis",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "portfolioUpdate",
-    //   schedule: "30 20 * * ?", // 4:30 PM ET (9:30 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-portfolioUpdate`,
-    //   maxRuntime: 300, // 5 minutes
-    //   invocationType: "scheduled",
-    //   description:
-    //     "Updates portfolio positions and calculates performance metrics",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "stopLoss-10am",
-    //   schedule: "0 14 * * ?", // 10 AM ET (2 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-stopLoss`,
-    //   maxRuntime: 120, // 2 minutes
-    //   invocationType: "scheduled",
-    //   description:
-    //     "Monitors positions and executes stop-loss orders (10 AM ET)",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "stopLoss-1pm",
-    //   schedule: "0 17 * * ?", // 1 PM ET (5 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-stopLoss`,
-    //   maxRuntime: 120, // 2 minutes
-    //   invocationType: "scheduled",
-    //   description: "Monitors positions and executes stop-loss orders (1 PM ET)",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "stopLoss-4pm",
-    //   schedule: "0 20 * * ?", // 4 PM ET (8 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-stopLoss`,
-    //   maxRuntime: 120, // 2 minutes
-    //   invocationType: "scheduled",
-    //   description: "Monitors positions and executes stop-loss orders (4 PM ET)",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "emailReport",
-    //   schedule: "30 20 * * ?", // 4:30 PM ET (9:30 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-emailReport`,
-    //   maxRuntime: 300, // 5 minutes
-    //   invocationType: "scheduled",
-    //   description: "Sends end-of-day performance and activity reports",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "weeklyAIReport",
-    //   schedule: "30 20 ? * SUN *", // Sundays 4:30 PM ET (9:30 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-weeklyAIReport`,
-    //   maxRuntime: 120, // 2 minutes
-    //   invocationType: "scheduled",
-    //   description: "Sends a weekly human-readable AI report",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "orderMonitor-11am",
-    //   schedule: "0 15 * * ?", // 11 AM ET (3 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-orderMonitor`,
-    //   maxRuntime: 120, // 2 minutes
-    //   invocationType: "scheduled",
-    //   description:
-    //     "Monitors pending orders and handles order status updates (11 AM ET)",
-    //   enabled: true,
-    // },
-    // {
-    //   jobName: "orderMonitor-2pm",
-    //   schedule: "0 18 * * ?", // 2 PM ET (7 PM UTC)
-    //   timezone: "America/New_York",
-    //   targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-orderMonitor`,
-    //   maxRuntime: 120, // 2 minutes
-    //   invocationType: "scheduled",
-    //   description:
-    //     "Monitors pending orders and handles order status updates (2 PM ET)",
-    //   enabled: true,
-    // },
+    {
+      jobName: "marketResearch",
+      schedule: "0 1 * * ?", // 8 PM ET (1 AM UTC)
+      timezone: "America/New_York",
+      targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-marketResearchWorker`,
+      maxRuntime: 600, // 10 minutes
+      invocationType: "scheduled",
+      description: "Generates deep AI analysis for high-potential tickers",
+      enabled: true,
+    },
+    {
+      jobName: "dailyTrading",
+      schedule: "0 20 * * ?", // 4 PM ET (9 PM UTC)
+      timezone: "America/New_York",
+      targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-dailyTradingWorker`,
+      maxRuntime: 180, // 3 minutes
+      invocationType: "scheduled",
+      description: "Makes automated buy/sell decisions based on AI analysis",
+      enabled: true,
+    },
+    {
+      jobName: "portfolioUpdate",
+      schedule: "30 20 * * ?", // 4:30 PM ET (9:30 PM UTC)
+      timezone: "America/New_York",
+      targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-portfolioUpdateWorker`,
+      maxRuntime: 300, // 5 minutes
+      invocationType: "scheduled",
+      description:
+        "Updates portfolio positions and calculates performance metrics",
+      enabled: true,
+    },
+    {
+      jobName: "stopLoss",
+      schedule: "0 14 * * ?", // 10 AM ET (2 PM UTC)
+      timezone: "America/New_York",
+      targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-stopLossWorker`,
+      maxRuntime: 120, // 2 minutes
+      invocationType: "scheduled",
+      description:
+        "Monitors positions and executes stop-loss orders (10 AM ET)",
+      enabled: true,
+    },
+    {
+      jobName: "emailReport",
+      schedule: "30 20 * * ?", // 4:30 PM ET (9:30 PM UTC)
+      timezone: "America/New_York",
+      targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-emailReportWorker`,
+      maxRuntime: 300, // 5 minutes
+      invocationType: "scheduled",
+      description: "Sends end-of-day performance and activity reports",
+      enabled: true,
+    },
+    {
+      jobName: "weeklyAIReport",
+      schedule: "30 20 ? * SUN *", // Sundays 4:30 PM ET (9:30 PM UTC)
+      timezone: "America/New_York",
+      targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-weeklyAIReportWorker`,
+      maxRuntime: 120, // 2 minutes
+      invocationType: "scheduled",
+      description: "Sends a weekly human-readable AI report",
+      enabled: true,
+    },
+    {
+      jobName: "orderMonitor",
+      schedule: "0 15 * * ?", // 11 AM ET (3 PM UTC)
+      timezone: "America/New_York",
+      targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-orderMonitorWorker`,
+      maxRuntime: 120, // 2 minutes
+      invocationType: "scheduled",
+      description:
+        "Monitors pending orders and handles order status updates (11 AM ET)",
+      enabled: true,
+    },
     // {
     //   jobName: "logProcessor",
     //   schedule: "0 * * * ?", // Every hour

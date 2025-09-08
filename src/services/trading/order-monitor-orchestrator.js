@@ -1,58 +1,53 @@
 /**
- * Order Monitor Handler
- * Monitors pending orders for price volatility and executes protective actions
- * Runs during market hours to check for significant price changes
+ * Order Monitor Orchestrator
+ * Shared function for both manual and scheduled order monitoring
  */
 
-const BrokerageService = require("../../services/brokerage-service");
-const MarketDataService = require("../../services/market-data-service");
+const BrokerageService = require("../brokerage-service");
+const MarketDataService = require("../market-data-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
-const { validateEnvironment } = require("../../config/environment");
-const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
-
-let logger;
-let errorHandler;
 
 /**
- * Scheduled Lambda handler for order monitoring
- * Checks pending orders and monitors for price volatility
+ * Execute order monitoring with consistent orchestration
+ * @param {Object} options - Configuration options
+ * @param {string} options.invocationType - 'manual' or 'scheduled'
+ * @param {Object} options.logger - Optional logger instance
+ * @param {Object} options.errorHandler - Optional error handler instance
+ * @returns {Promise<Object>} Order monitoring results
  */
-const baseHandler = async (event, context) => {
-  // Initialize services
-  logger = new Logger("order-monitor");
-  errorHandler = new ErrorHandler("order-monitor");
+async function performOrderMonitoring(options = {}) {
+  const { invocationType = "manual", logger, errorHandler } = options;
+
+  // Use provided logger/errorHandler or create new ones
+  const logInstance = logger || new Logger(`order-monitor-${invocationType}`);
+  const errorHandlerInstance =
+    errorHandler || new ErrorHandler(`order-monitor-${invocationType}`);
 
   try {
     // Log function start
-    logger.logLambdaStart(event, context);
-
-    // Validate environment
-    validateEnvironment();
-
-    logger.info("🔍 Starting order monitoring and volatility check");
+    logInstance.info(
+      `🔍 Starting ${invocationType} order monitoring and volatility check`
+    );
 
     // Initialize services
     const brokerageService = new BrokerageService();
     const marketDataService = new MarketDataService();
 
     // Get all open orders
-    logger.info("📋 Fetching open orders");
+    logInstance.info("📋 Fetching open orders");
     const openOrders = await brokerageService.getOpenOrders();
 
     if (!openOrders || openOrders.length === 0) {
-      logger.info("✅ No open orders to monitor");
+      logInstance.info("✅ No open orders to monitor");
       return {
-        statusCode: 200,
-        body: JSON.stringify({
-          message: "No open orders to monitor",
-          monitoredOrders: 0,
-          timestamp: new Date().toISOString(),
-        }),
+        message: "No open orders to monitor",
+        monitoredOrders: 0,
+        timestamp: new Date().toISOString(),
       };
     }
 
-    logger.info(`📊 Monitoring ${openOrders.length} open orders`);
+    logInstance.info(`📊 Monitoring ${openOrders.length} open orders`);
 
     const monitoringResults = [];
     const volatilityAlerts = [];
@@ -114,13 +109,7 @@ const baseHandler = async (event, context) => {
             };
 
             volatilityAlerts.push(alert);
-            logger.warn(`⚠️ Price volatility alert for ${ticker}`, alert);
-
-            // Could implement automatic actions here:
-            // - Cancel order if price deviation is too large
-            // - Send email alerts
-            // - Adjust limit prices
-            // - Notify trading system
+            logInstance.warn(`⚠️ Price volatility alert for ${ticker}`, alert);
           }
 
           monitoringResults.push({
@@ -133,7 +122,7 @@ const baseHandler = async (event, context) => {
             status: "monitored",
           });
         } else {
-          logger.warn(`Could not get market data for ${ticker}`);
+          logInstance.warn(`Could not get market data for ${ticker}`);
           monitoringResults.push({
             ticker,
             orderId,
@@ -141,7 +130,7 @@ const baseHandler = async (event, context) => {
           });
         }
       } catch (orderError) {
-        logger.error(`Error monitoring order ${order.id}`, orderError);
+        logInstance.error(`Error monitoring order ${order.id}`, orderError);
         monitoringResults.push({
           ticker: order.symbol,
           orderId: order.id,
@@ -162,33 +151,34 @@ const baseHandler = async (event, context) => {
         .length,
     };
 
-    logger.info("✅ Order monitoring completed", summary);
-
-    // Log function end
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
+    logInstance.info("✅ Order monitoring completed", summary);
 
     return {
-      statusCode: 200,
-      body: JSON.stringify({
-        message: "Order monitoring completed",
-        summary,
-        volatilityAlerts,
-        monitoringResults,
-        timestamp: new Date().toISOString(),
-      }),
+      message: "Order monitoring completed",
+      summary,
+      volatilityAlerts,
+      monitoringResults,
+      timestamp: new Date().toISOString(),
     };
   } catch (error) {
-    logger.error("Order monitoring failed", error);
-    await errorHandler.sendErrorAlert(error, {
-      function: "order-monitor",
-      monitoringType: "volatility_check",
-    });
+    logInstance.error(`Order monitoring failed`, error);
 
-    // Log function end with error
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
+    // Send error alert if error handler provided
+    if (errorHandlerInstance) {
+      try {
+        await errorHandlerInstance.sendErrorAlert(error, {
+          function: `order-monitor-${invocationType}`,
+          monitoringType: "volatility_check",
+        });
+      } catch (alertError) {
+        logInstance.error("Failed to send error alert", alertError);
+      }
+    }
 
     throw error;
   }
-};
+}
 
-module.exports.handler = withScheduledLogFlushing(baseHandler, "order-monitor");
+module.exports = {
+  performOrderMonitoring,
+};

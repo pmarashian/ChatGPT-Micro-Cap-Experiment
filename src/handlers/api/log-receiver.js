@@ -57,7 +57,7 @@ module.exports.logReceiver = async (event) => {
 
     // For offline development, process logs directly to avoid Lambda invoke issues
     if (isOffline) {
-      console.log("Processing logs directly in offline mode...");
+      // console.log("Processing logs directly in offline mode...");
       // Process logs directly without Lambda invoke
       if (logProcessor) {
         await logProcessor({ logs });

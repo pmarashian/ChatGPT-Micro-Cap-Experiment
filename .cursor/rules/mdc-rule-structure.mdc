@@ -1,0 +1,391 @@
+---
+description: "Documentation for creating and maintaining Cursor MDC rule files with proper structure and formatting"
+globs:
+alwaysApply: false
+---
+
+# MDC Rule Structure Documentation
+
+## Overview
+
+This document provides comprehensive guidance for creating and maintaining Cursor Markdown Cursor (.mdc) rule files. All MDC rule files in this project must follow the established structure and formatting standards.
+
+## Required MDC Header Format
+
+Every `.mdc` file must begin with this exact header structure:
+
+```yaml
+---
+description: "Brief but descriptive explanation of the rule's purpose and scope"
+globs:
+alwaysApply: false
+---
+```
+
+### Header Field Requirements
+
+#### `description`
+
+- **Type**: String
+- **Required**: Yes
+- **Purpose**: Explains what the rule covers and when it applies
+- **Best Practices**:
+  - Keep under 100 characters
+  - Start with action verb when possible
+  - Be specific about the rule's domain
+  - Examples:
+    - ✅ `"Implementation patterns and best practices for creating workers in the job orchestration system"`
+    - ✅ `"Quick reference guide for job orchestration patterns, debugging, and common cron expressions"`
+    - ❌ `"Rules"` (too vague)
+    - ❌ `"This is a rule file for various things"` (too generic)
+
+#### `globs`
+
+- **Type**: Array (currently empty)
+- **Required**: Yes
+- **Purpose**: Reserved for future file pattern matching
+- **Current Value**: Always `globs:` (empty)
+
+#### `alwaysApply`
+
+- **Type**: Boolean
+- **Required**: Yes
+- **Purpose**: Controls whether the rule applies to all files
+- **Current Value**: Always `false`
+
+## File Structure and Organization
+
+### File Location
+
+- All MDC rules must be placed in `.cursor/rules/`
+- Use kebab-case naming: `rule-name.mdc`
+- Examples:
+  - `job-orchestration-pattern.mdc`
+  - `worker-patterns.mdc`
+  - `error-handling.mdc`
+
+### Content Organization
+
+```markdown
+---
+description: "Brief description of the rule's purpose"
+globs:
+alwaysApply: false
+---
+
+# Rule Title
+
+## Overview
+
+Brief introduction to what this rule covers
+
+## Section 1
+
+Detailed content...
+
+## Section 2
+
+More detailed content...
+
+## Examples
+
+Code examples and use cases...
+
+## Best Practices
+
+Recommendations and guidelines...
+
+---
+
+_Footer text summarizing the rule's purpose_
+```
+
+## Content Guidelines
+
+### 1. Title and Headings
+
+- Use `#` for main title (appears after header)
+- Use `##` for major sections
+- Use `###` for subsections
+- Use `####` for sub-subsections
+
+### 2. Code Examples
+
+- Use triple backticks for code blocks
+- Specify language for syntax highlighting:
+  ```javascript
+  // JavaScript example
+  const example = "code";
+  ```
+- Include comments explaining complex code
+- Show both good and bad examples when relevant
+
+### 3. Lists and Tables
+
+- Use bullet points (`-`) for unordered lists
+- Use numbered lists (`1.`) for sequential steps
+- Use tables for structured comparisons:
+  ```markdown
+  | Good Practice | Bad Practice |
+  | ------------- | ------------ |
+  | Clean code    | Messy code   |
+  ```
+
+### 4. Links and References
+
+- Use relative paths for internal references
+- Link to other MDC files when relevant
+- Example: `[Worker Patterns](worker-patterns.mdc)`
+
+## Rule Categories
+
+### 1. Implementation Guides
+
+- Focus on how to implement specific patterns
+- Include step-by-step instructions
+- Provide complete examples
+- Example: `job-orchestration-pattern.mdc`
+
+### 2. Quick References
+
+- Concise information for common tasks
+- Include tables, checklists, and snippets
+- Focus on speed of access
+- Example: `orchestration-quick-reference.mdc`
+
+### 3. Best Practices
+
+- Guidelines and recommendations
+- Explain why certain practices are preferred
+- Include anti-patterns to avoid
+- Example: `worker-patterns.mdc`
+
+### 4. API Documentation
+
+- Document service interfaces and methods
+- Include parameter descriptions
+- Show usage examples
+- Focus on developer experience
+
+## Quality Standards
+
+### 1. Completeness
+
+- ✅ Cover all aspects of the topic
+- ✅ Include practical examples
+- ✅ Provide troubleshooting guidance
+- ✅ Link to related documentation
+
+### 2. Clarity
+
+- ✅ Use clear, concise language
+- ✅ Define technical terms
+- ✅ Structure content logically
+- ✅ Include table of contents for long documents
+
+### 3. Accuracy
+
+- ✅ Verify all code examples work
+- ✅ Ensure file paths are correct
+- ✅ Keep information current
+- ✅ Test all referenced commands
+
+### 4. Consistency
+
+- ✅ Follow established formatting patterns
+- ✅ Use consistent terminology
+- ✅ Maintain similar structure across related rules
+- ✅ Follow project's coding conventions
+
+## Maintenance Guidelines
+
+### When to Create New Rules
+
+- When documenting a new architectural pattern
+- When establishing new development practices
+- When creating reusable code patterns
+- When documenting complex business logic
+
+### When to Update Existing Rules
+
+- When implementation patterns change
+- When new best practices are discovered
+- When fixing errors or inaccuracies
+- When adding missing information
+
+### Version Control
+
+- Commit MDC files with related code changes
+- Include clear commit messages
+- Update rule references when files are renamed
+- Keep change history for important rules
+
+## File Validation
+
+### Required Checks
+
+- [ ] Header format matches exactly
+- [ ] Description is descriptive and under 100 characters
+- [ ] File ends with proper footer
+- [ ] No duplicate content (run duplication check)
+- [ ] All links are valid
+- [ ] Code examples are syntactically correct
+
+### Automated Validation
+
+Run this command to check for common issues:
+
+```bash
+# Check for duplicate content
+grep -r "## Overview" .cursor/rules/ | wc -l
+
+# Validate header format
+head -5 .cursor/rules/*.mdc
+```
+
+## Examples
+
+### Complete Rule File Example
+
+````markdown
+---
+description: "Guidelines for implementing error handling patterns in Lambda functions"
+globs:
+alwaysApply: false
+---
+
+# Error Handling Patterns
+
+## Overview
+
+This rule defines the standard error handling patterns used throughout the application...
+
+## Core Principles
+
+### 1. Consistent Error Types
+
+- Use specific error types for different scenarios
+- Include context information in error messages
+- Log errors at appropriate levels
+
+### 2. Error Propagation
+
+- Let orchestration wrapper handle job status updates
+- Don't catch errors you can't handle properly
+- Use error boundaries for complex operations
+
+## Implementation Examples
+
+### Basic Error Handling
+
+```javascript
+const businessLogic = async ({ logger, errorHandler, event, context }) => {
+  try {
+    const result = await riskyOperation();
+    return result;
+  } catch (error) {
+    logger.error("Operation failed", {
+      error: error.message,
+      operation: "risky_operation",
+      context: event,
+    });
+    throw error; // Let wrapper handle job status
+  }
+};
+```
+````
+
+### Error Types
+
+```javascript
+class ValidationError extends Error {
+  constructor(message, field) {
+    super(message);
+    this.name = "ValidationError";
+    this.field = field;
+  }
+}
+
+class NetworkError extends Error {
+  constructor(message, url) {
+    super(message);
+    this.name = "NetworkError";
+    this.url = url;
+  }
+}
+```
+
+## Best Practices
+
+- Always log errors with sufficient context
+- Use specific error types when possible
+- Don't expose sensitive information in error messages
+- Test error scenarios thoroughly
+
+---
+
+_Following these error handling patterns ensures robust and maintainable Lambda functions._
+
+````
+
+## Template
+
+Use this template when creating new MDC rule files:
+
+```markdown
+---
+description: "[Brief description of what this rule covers]"
+globs:
+alwaysApply: false
+---
+
+# [Descriptive Title]
+
+## Overview
+[Brief introduction explaining the purpose and scope]
+
+## [Main Section]
+[Detailed content with examples]
+
+## [Another Section]
+[More detailed content]
+
+## Best Practices
+[Guidelines and recommendations]
+
+---
+
+_[Summary statement about the rule's importance]_
+````
+
+## Troubleshooting
+
+### Common Issues
+
+#### Header Format Errors
+
+- **Symptom**: Rule doesn't load properly in Cursor
+- **Cause**: Missing or malformed YAML header
+- **Solution**: Ensure exact header format with proper indentation
+
+#### Content Duplication
+
+- **Symptom**: Same content appears multiple times
+- **Cause**: Copy-paste errors or file corruption
+- **Solution**: Check for duplicates and remove redundant content
+
+#### Broken Links
+
+- **Symptom**: References don't work
+- **Cause**: Incorrect file paths or renamed files
+- **Solution**: Update all references when files are moved
+
+#### Formatting Issues
+
+- **Symptom**: Content doesn't render properly
+- **Cause**: Incorrect Markdown syntax
+- **Solution**: Validate with a Markdown preview tool
+
+---
+
+_This documentation ensures all MDC rule files maintain consistent structure and quality standards._

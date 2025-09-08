@@ -1,3 +1,9 @@
+---
+description: "Comprehensive guide for implementing job orchestration pattern with database-driven scheduling for serverless Lambda functions"
+globs:
+alwaysApply: false
+---
+
 # Job Orchestration Pattern - Complete Implementation Guide
 
 ## Table of Contents
@@ -39,8 +45,9 @@ Traditional serverless cron triggers have limitations:
 │                    API Layer                                │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │  Trigger APIs (Manual Execution)                       │ │
-│  │  - /api/trigger/universe-build                         │ │
-│  │  - /api/trigger/discovery-ingestion                    │ │
+│  │  - /api/trigger/daily-trading                          │ │
+│  │  - /api/trigger/email-report                           │ │
+│  │  - /api/trigger/market-research                        │ │
 │  └─────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │                    Orchestration Layer                      │
@@ -54,17 +61,25 @@ Traditional serverless cron triggers have limitations:
 │                    Worker Layer                             │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │  Pure Business Logic Workers                           │ │
-│  │  - universe-build-worker                               │ │
-│  │  - discovery-ingestion-worker                          │ │
-│  │  - universe-ranking-worker                             │ │
+│  │  - daily-trading-worker                                │ │
+│  │  - email-report-worker                                 │ │
+│  │  - market-research-worker                              │ │
+│  │  - portfolio-update-worker                             │ │
+│  │  - order-monitor-worker                                │ │
+│  │  │  - stop-loss-worker                                 │ │
+│  │  - weekly-ai-report-worker                             │ │
 │  └─────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │                    Service Layer                            │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │  Business Logic Orchestrators                          │ │
-│  │  - universe-build-orchestrator                         │ │
-│  │  - discovery-ingestion-orchestrator                    │ │
-│  │  - universe-ranking-orchestrator                       │ │
+│  │  - daily-trading-orchestrator                          │ │
+│  │  - email-report-orchestrator                           │ │
+│  │  - market-research-orchestrator                        │ │
+│  │  - portfolio-update-orchestrator                       │ │
+│  │  - order-monitor-orchestrator                          │ │
+│  │  - stop-loss-orchestrator                              │ │
+│  │  - weekly-ai-report-orchestrator                       │ │
 │  └─────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │                    Data Layer                               │

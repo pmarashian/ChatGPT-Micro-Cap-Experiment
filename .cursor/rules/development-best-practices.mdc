@@ -1,0 +1,52 @@
+---
+description: "Development workflow best practices including process management and local development guidelines"
+globs:
+alwaysApply: false
+---
+
+# Development Best Practices
+
+## Process Management
+
+### Serverless Offline
+
+- **Clean up processes**: When running `serverless offline`, ALWAYS kill the process when done
+- **Background processes**: Use `Ctrl+C` or process termination commands to stop running servers
+- **Resource management**: Don't leave development processes running unnecessarily
+- **Terminal hygiene**: Keep terminals clean by properly terminating background processes
+
+### Local Development Workflow
+
+1. **Start serverless offline** when needed for local testing
+2. **Test your changes** thoroughly
+3. **Clean up processes** by stopping the serverless offline instance
+4. **Verify no background processes** are left running
+
+### Commands
+
+```bash
+# Start serverless offline
+serverless offline
+
+# Stop with Ctrl+C
+# Or use process management tools if needed
+```
+
+## Why This Matters
+
+- **Resource efficiency**: Prevents unnecessary CPU/memory usage on development machine
+- **Terminal management**: Keeps development environment organized and clean
+- **System performance**: Avoids background processes that could impact development workflow
+- **Best practices**: Maintains professional development habits
+
+## Verification
+
+Always check for running processes before starting new development sessions:
+
+```bash
+# Check for node processes
+ps aux | grep node
+
+# Check for serverless processes
+ps aux | grep serverless
+```

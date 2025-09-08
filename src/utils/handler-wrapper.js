@@ -304,21 +304,26 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
         context,
       });
 
-      // Update job status if this was triggered by orchestrator
+      // For orchestration-triggered jobs, include completion info in response
+      // The orchestrator will handle status updates centrally
       if (isOrchestrationTrigger && executionId && jobName) {
-        try {
-          await updateJobStatus(jobName, "completed", executionId);
-          logger.info("Job status updated to completed", {
-            executionId,
+        logger.info("Job business logic completed successfully", {
+          executionId,
+          jobName,
+          orchestrationExecutionId: event.orchestrationExecutionId,
+        });
+
+        // Return enhanced result for orchestrator
+        return {
+          statusCode: 200,
+          ...result,
+          _orchestration: {
             jobName,
-          });
-        } catch (statusError) {
-          logger.error("Failed to update job status", {
             executionId,
-            jobName,
-            statusError,
-          });
-        }
+            status: "success",
+            orchestrationExecutionId: event.orchestrationExecutionId,
+          },
+        };
       }
 
       // Log function end
@@ -328,18 +333,32 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
     } catch (error) {
       logger.error(`${handlerName} failed`, error);
 
-      // Update job status if this was triggered by orchestrator
+      // For orchestration-triggered jobs, include failure info in response
+      // The orchestrator will handle status updates centrally
       if (isOrchestrationTrigger && executionId && jobName) {
-        try {
-          await updateJobStatus(jobName, "failed", executionId, error);
-          logger.info("Job status updated to failed", { executionId, jobName });
-        } catch (statusError) {
-          logger.error("Failed to update job status", {
-            executionId,
+        logger.error("Job business logic failed", {
+          executionId,
+          jobName,
+          orchestrationExecutionId: event.orchestrationExecutionId,
+          error: error.message,
+        });
+
+        // Return failure response with orchestration info
+        // For synchronous invocations, we return the error info instead of throwing
+        return {
+          statusCode: 500,
+          _orchestration: {
             jobName,
-            statusError,
-          });
-        }
+            executionId,
+            status: "failed",
+            orchestrationExecutionId: event.orchestrationExecutionId,
+            originalError: error.message,
+          },
+          error: {
+            message: error.message,
+            stack: error.stack,
+          },
+        };
       }
 
       // Send error alert
@@ -405,7 +424,6 @@ function withApiTriggerLifecycle(options = {}) {
 
       logger.debug(`${targetFunctionName} triggered successfully`, {
         targetFunction: targetFunctionName,
-        requestId: result.$response.requestId,
         statusCode: result.StatusCode,
       });
 
@@ -422,7 +440,6 @@ function withApiTriggerLifecycle(options = {}) {
           success: true,
           message: `${targetFunctionName} triggered successfully`,
           targetFunction: targetFunctionName,
-          requestId: result.$response.requestId,
           timestamp: new Date().toISOString(),
         }),
       };

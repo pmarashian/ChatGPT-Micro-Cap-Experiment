@@ -1,132 +1,14 @@
 /**
- * Daily Trading Lambda Handler
- * Main orchestration function for automated trading cycle
+ * Daily Trading Orchestrator
+ * Shared function for both manual and scheduled daily trading execution
  */
 
-const AIService = require("../../services/ai-service");
-const BrokerageService = require("../../services/brokerage-service");
-const MarketDataService = require("../../services/market-data-service");
-const PortfolioService = require("../../services/portfolio-service");
+const AIService = require("../ai-service");
+const BrokerageService = require("../brokerage-service");
+const MarketDataService = require("../market-data-service");
+const PortfolioService = require("../portfolio-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
-const { validateEnvironment } = require("../../config/environment");
-const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
-
-let logger;
-let errorHandler;
-
-/**
- * Lambda handler for daily trading execution
- */
-
-/**
- * Lambda handler for scheduled daily trading execution
- */
-const baseHandler = async (event, context) => {
-  // Initialize services
-  logger = new Logger("daily-trading");
-  errorHandler = new ErrorHandler("daily-trading");
-
-  try {
-    // Log function start
-    logger.logLambdaStart(event, context);
-
-    // Validate environment
-    validateEnvironment();
-
-    // Check if trading is enabled
-    if (process.env.EXECUTE_TRADES === "false") {
-      logger.info("Trade execution disabled, running in simulation mode");
-    }
-
-    logger.info("Starting daily trading session");
-
-    // Initialize services
-    const portfolioService = new PortfolioService();
-    const marketDataService = new MarketDataService();
-    const aiService = new AIService();
-    const brokerageService = new BrokerageService();
-
-    // 1. Fetch current portfolio
-    logger.info("Step 1: Fetching current portfolio");
-    const currentPortfolio = await portfolioService.getCurrentPortfolio();
-
-    // 2. Fetch market data for portfolio holdings
-    logger.info("Step 2: Fetching market data");
-    const marketData = await marketDataService.getPortfolioMarketData(
-      currentPortfolio
-    );
-
-    // 3. Get AI trading decisions
-    logger.info("Step 3: Getting AI trading decisions");
-    const tradingDecisions = await aiService.getTradingDecision(
-      currentPortfolio,
-      marketData
-    );
-
-    // 4. Execute trades (if enabled)
-    logger.info("Step 4: Executing trades");
-    const tradeResults = await executeTrades(
-      tradingDecisions.decisions,
-      brokerageService
-    );
-
-    // 5. Update stop losses
-    if (
-      tradingDecisions.stopLossUpdates &&
-      tradingDecisions.stopLossUpdates.length > 0
-    ) {
-      logger.info("Step 5: Updating stop losses");
-      await portfolioService.updateStopLosses(tradingDecisions.stopLossUpdates);
-    }
-
-    // 6. Update portfolio with trade results
-    logger.info("Step 6: Updating portfolio");
-    const updatedPortfolio = await portfolioService.updatePortfolio(
-      tradeResults
-    );
-
-    // Log completion
-    const successCount = tradeResults.filter((r) => r.success).length;
-    const totalCount = tradeResults.length;
-
-    logger.info("Daily trading completed successfully", {
-      tradesProcessed: totalCount,
-      tradesSuccessful: successCount,
-      aiProvider: "openai",
-      aiModel: "gpt-4",
-      portfolioValue: updatedPortfolio.totalValue,
-      cashBalance: updatedPortfolio.cash,
-    });
-
-    // Log function end
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        message: "Daily trading completed successfully",
-        tradesProcessed: totalCount,
-        tradesSuccessful: successCount,
-        portfolioValue: updatedPortfolio.totalValue,
-        timestamp: new Date().toISOString(),
-        aiProvider: "openai",
-        aiModel: "gpt-4",
-      }),
-    };
-  } catch (error) {
-    logger.error("Daily trading failed", {
-      error: error.message,
-    });
-
-    await errorHandler.sendErrorAlert(error, { function: "daily-trading" });
-
-    // Log function end with error
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
-
-    throw error; // Let Lambda handle the error response
-  }
-};
 
 /**
  * Execute trades based on AI decisions
@@ -172,14 +54,14 @@ async function executeTrades(decisions, brokerageService) {
       if (intendedCost > remainingBudget && remainingBudget > 0) {
         const adjustedShares = Math.floor(remainingBudget / price);
         if (adjustedShares >= 1) {
-          logger.info(
+          console.log(
             `Adjusting ${d.ticker} shares from ${d.shares} to ${adjustedShares} to respect utilization target`
           );
           d.shares = adjustedShares;
           remainingBudget -= adjustedShares * price;
         } else {
           // No budget left for at least 1 share; convert to HOLD
-          logger.info(
+          console.log(
             `Skipping ${d.ticker} BUY due to utilization cap; insufficient remaining budget`
           );
           d.action = "HOLD";
@@ -189,7 +71,7 @@ async function executeTrades(decisions, brokerageService) {
       }
     }
   } catch (e) {
-    logger.warn(
+    console.warn(
       "Utilization enforcement skipped due to error",
       e?.message || e
     );
@@ -199,12 +81,12 @@ async function executeTrades(decisions, brokerageService) {
     try {
       // Skip HOLD and RESEARCH decisions (not executable trades)
       if (decision.action === "HOLD") {
-        logger.debug(`Skipping HOLD decision for ${decision.ticker}`);
+        console.debug(`Skipping HOLD decision for ${decision.ticker}`);
         continue;
       }
 
       if (decision.action === "RESEARCH") {
-        logger.debug(
+        console.debug(
           `Skipping RESEARCH decision for ${decision.ticker} - further analysis needed`
         );
         continue;
@@ -212,7 +94,7 @@ async function executeTrades(decisions, brokerageService) {
 
       // Check if trading is enabled
       if (process.env.EXECUTE_TRADES === "false") {
-        logger.info(
+        console.log(
           `SIMULATION: Would execute ${decision.action} ${decision.shares} ${decision.ticker}`
         );
         results.push({
@@ -226,7 +108,7 @@ async function executeTrades(decisions, brokerageService) {
 
       // RESEARCH actions should not reach here due to early skip above, but add safeguard
       if (decision.action === "RESEARCH") {
-        logger.warn(
+        console.warn(
           `RESEARCH action should have been skipped: ${decision.ticker}`
         );
         results.push({
@@ -241,7 +123,7 @@ async function executeTrades(decisions, brokerageService) {
       // Validate tradability before executing trade
       const isTradable = await brokerageService.isTradable(decision.ticker);
       if (!isTradable) {
-        logger.warn(
+        console.warn(
           `Skipping ${decision.action} for ${decision.ticker} - not tradable on Alpaca`
         );
         results.push({
@@ -255,13 +137,13 @@ async function executeTrades(decisions, brokerageService) {
       }
 
       // Execute real trade
-      logger.info(
+      console.log(
         `Executing ${decision.action} order: ${decision.shares} ${decision.ticker}`
       );
       const result = await brokerageService.executeTrade(decision);
       results.push(result);
     } catch (error) {
-      logger.error(`Trade execution failed for ${decision.ticker}`, error);
+      console.error(`Trade execution failed for ${decision.ticker}`, error);
 
       results.push({
         ...decision,
@@ -275,4 +157,116 @@ async function executeTrades(decisions, brokerageService) {
   return results;
 }
 
-module.exports.handler = withScheduledLogFlushing(baseHandler, "daily-trading");
+/**
+ * Execute daily trading with consistent orchestration
+ * @param {Object} options - Configuration options
+ * @param {string} options.invocationType - 'manual' or 'scheduled'
+ * @param {Object} options.logger - Optional logger instance
+ * @param {Object} options.errorHandler - Optional error handler instance
+ * @returns {Promise<Object>} Trading results
+ */
+async function performDailyTrading(options = {}) {
+  const { invocationType = "manual", logger, errorHandler } = options;
+
+  // Use provided logger/errorHandler or create new ones
+  const logInstance = logger || new Logger(`daily-trading-${invocationType}`);
+  const errorHandlerInstance =
+    errorHandler || new ErrorHandler(`daily-trading-${invocationType}`);
+
+  try {
+    // Log function start
+    logInstance.info(`🚀 Starting ${invocationType} daily trading session`);
+
+    // Check if trading is enabled
+    if (process.env.EXECUTE_TRADES === "false") {
+      logInstance.info("Trade execution disabled, running in simulation mode");
+    }
+
+    // Initialize services
+    const portfolioService = new PortfolioService();
+    const marketDataService = new MarketDataService();
+    const aiService = new AIService();
+    const brokerageService = new BrokerageService();
+
+    // 1. Fetch current portfolio
+    logInstance.info("Step 1: Fetching current portfolio");
+    const currentPortfolio = await portfolioService.getCurrentPortfolio();
+
+    // 2. Fetch market data for portfolio holdings
+    logInstance.info("Step 2: Fetching market data");
+    const marketData = await marketDataService.getPortfolioMarketData(
+      currentPortfolio
+    );
+
+    // 3. Get AI trading decisions
+    logInstance.info("Step 3: Getting AI trading decisions");
+    const tradingDecisions = await aiService.getTradingDecision(
+      currentPortfolio,
+      marketData
+    );
+
+    // 4. Execute trades (if enabled)
+    logInstance.info("Step 4: Executing trades");
+    const tradeResults = await executeTrades(
+      tradingDecisions.decisions,
+      brokerageService
+    );
+
+    // 5. Update stop losses
+    if (
+      tradingDecisions.stopLossUpdates &&
+      tradingDecisions.stopLossUpdates.length > 0
+    ) {
+      logInstance.info("Step 5: Updating stop losses");
+      await portfolioService.updateStopLosses(tradingDecisions.stopLossUpdates);
+    }
+
+    // 6. Update portfolio with trade results
+    logInstance.info("Step 6: Updating portfolio");
+    const updatedPortfolio = await portfolioService.updatePortfolio(
+      tradeResults
+    );
+
+    // Log completion
+    const successCount = tradeResults.filter((r) => r.success).length;
+    const totalCount = tradeResults.length;
+
+    logInstance.info("✅ Daily trading completed successfully", {
+      tradesProcessed: totalCount,
+      tradesSuccessful: successCount,
+      aiProvider: "openai",
+      aiModel: "gpt-4",
+      portfolioValue: updatedPortfolio.totalValue,
+      cashBalance: updatedPortfolio.cash,
+    });
+
+    return {
+      tradesProcessed: totalCount,
+      tradesSuccessful: successCount,
+      portfolioValue: updatedPortfolio.totalValue,
+      cashBalance: updatedPortfolio.cash,
+      timestamp: new Date().toISOString(),
+    };
+  } catch (error) {
+    logInstance.error(`Daily trading failed`, error);
+
+    // Send error alert if error handler provided
+    if (errorHandlerInstance) {
+      try {
+        await errorHandlerInstance.sendErrorAlert(error, {
+          function: `daily-trading-${invocationType}`,
+          operation: "daily_trading_execution",
+        });
+      } catch (alertError) {
+        logInstance.error("Failed to send error alert", alertError);
+      }
+    }
+
+    throw error;
+  }
+}
+
+module.exports = {
+  performDailyTrading,
+  executeTrades,
+};

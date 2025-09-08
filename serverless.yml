@@ -3,7 +3,6 @@ service: chatgpt-trading-phase1
 plugins:
   - serverless-dotenv-plugin
   - serverless-offline
-  - serverless-dynamodb-local
 
 custom:
   dotenv:
@@ -40,20 +39,6 @@ custom:
     httpPort: 3000
     lambdaPort: 3002
 
-  dynamodb:
-    stages:
-      - dev
-    start:
-      port: 8000
-      inMemory: true
-      migrate: true
-      seed: true
-    seed:
-      dev:
-        sources:
-          - table: ${self:service}-${opt:stage, self:provider.stage}
-            sources: [./dynamodb-seed.json]
-
 provider:
   name: aws
   runtime: nodejs20.x
@@ -68,6 +53,7 @@ provider:
             - dynamodb:GetItem
             - dynamodb:PutItem
             - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
             - dynamodb:Query
             - dynamodb:Scan
           Resource:
@@ -144,83 +130,73 @@ functions:
   # These functions run automatically on schedule for the trading system
   # ============================================================================
 
-  # AI Market Research - Production
-  # Generates deep AI analysis for high-potential tickers twice daily
-  # Runs after discovery ingestion to analyze newly collected data
+  # AI Market Research Worker - Production
+  # Worker that performs deep AI analysis for high-potential tickers
+  # Triggered by job orchestrator and API triggers
   # Production: Yes - Core research pipeline
-  marketResearch:
-    handler: src/handlers/scheduled/market-research.handler
+  marketResearchWorker:
+    handler: src/handlers/workers/market-research-worker.handler
     timeout: 600 # 10 minutes for deep research
-    events:
-      - schedule: cron(0 1 * * ? *) # 8 PM ET (1 AM UTC) - After 00:00 UTC ingestion
-      - schedule: cron(0 13 * * ? *) # 8 AM ET (1 PM UTC) - After 12:00 UTC ingestion
+    # NOTE: No direct events - triggered by job orchestrator
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
-  # Daily Trading Engine - Production
-  # Makes automated buy/sell decisions based on AI analysis and market data
-  # Runs at market close to execute trading strategies
+  # Daily Trading Worker - Production
+  # Worker that makes automated buy/sell decisions based on AI analysis
+  # Triggered by job orchestrator and API triggers
   # Production: Yes - Core trading engine
-  dailyTrading:
-    handler: src/handlers/scheduled/daily-trading.handler
+  dailyTradingWorker:
+    handler: src/handlers/workers/daily-trading-worker.handler
     timeout: 180 # 3 minutes for trading decisions
-    events:
-      - schedule: cron(0 20 * * ? *) # 4 PM ET (9 PM UTC) - Market close timing
+    # NOTE: No direct events - triggered by job orchestrator
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
-  # Portfolio Position Updates - Production
-  # Updates portfolio positions and calculates performance metrics
-  # Runs after market close to capture end-of-day positions
+  # Portfolio Update Worker - Production
+  # Worker that updates portfolio positions and calculates performance metrics
+  # Triggered by job orchestrator and API triggers
   # Production: Yes - Portfolio tracking and reporting
-  portfolioUpdate:
-    handler: src/handlers/scheduled/portfolio-update.handler
-    events:
-      - schedule: cron(30 20 * * ? *) # 4:30 PM ET (9:30 PM UTC) - After market close
+  portfolioUpdateWorker:
+    handler: src/handlers/workers/portfolio-update-worker.handler
+    # NOTE: No direct events - triggered by job orchestrator
 
-  # Stop Loss Monitoring - Production
-  # Monitors positions and executes stop-loss orders to limit losses
-  # Runs multiple times during trading hours for timely risk management
+  # Stop Loss Worker - Production
+  # Worker that monitors positions and executes stop-loss orders
+  # Triggered by job orchestrator and API triggers
   # Production: Yes - Critical risk management
-  stopLoss:
-    handler: src/handlers/scheduled/stop-loss.handler
-    events:
-      - schedule: cron(0 14 * * ? *) # 10 AM ET (2 PM UTC) - After market open
-      - schedule: cron(0 17 * * ? *) # 1 PM ET (5 PM UTC) - Mid-day check
-      - schedule: cron(0 20 * * ? *) # 4 PM ET (8 PM UTC) - Market close
+  stopLossWorker:
+    handler: src/handlers/workers/stop-loss-worker.handler
+    # NOTE: No direct events - triggered by job orchestrator
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
 
-  # Daily Email Reports - Production
-  # Sends end-of-day performance and activity reports to administrators
-  # Includes trading summary, portfolio updates, and system health
+  # Email Report Worker - Production
+  # Worker that sends end-of-day performance and activity reports
+  # Triggered by job orchestrator and API triggers
   # Production: Yes - Operational monitoring and reporting
-  emailReport:
-    handler: src/handlers/scheduled/email-report.handler
-    events:
-      - schedule: cron(30 20 * * ? *) # 4:30 PM ET (9:30 PM UTC) - End of day report
+  emailReportWorker:
+    handler: src/handlers/workers/email-report-worker.handler
+    # NOTE: No direct events - triggered by job orchestrator
 
-  # Weekly AI Report - Production
-  # Sends a weekly human-readable AI report
-  weeklyAIReport:
-    handler: src/handlers/scheduled/weekly-ai-report.handler
+  # Weekly AI Report Worker - Production
+  # Worker that sends a weekly human-readable AI report
+  # Triggered by job orchestrator and API triggers
+  weeklyAIReportWorker:
+    handler: src/handlers/workers/weekly-ai-report-worker.handler
     timeout: 120
-    events:
-      - schedule: cron(30 20 ? * SUN *) # Sundays 4:30 PM ET (9:30 PM UTC)
+    # NOTE: No direct events - triggered by job orchestrator
 
-  # Order Status Monitoring - Production
-  # Monitors pending orders and handles order status updates
-  # Ensures orders are filled and handles any issues
+  # Order Monitor Worker - Production
+  # Worker that monitors pending orders and handles order status updates
+  # Triggered by job orchestrator and API triggers
   # Production: Yes - Order execution monitoring
-  orderMonitor:
-    handler: src/handlers/scheduled/order-monitor.handler
+  orderMonitorWorker:
+    handler: src/handlers/workers/order-monitor-worker.handler
     timeout: 120 # 2 minutes for order monitoring
-    events:
-      - schedule: cron(0 15 * * ? *) # 11 AM ET (3 PM UTC) - Mid-morning check
-      - schedule: cron(0 18 * * ? *) # 2 PM ET (7 PM UTC) - Mid-afternoon check
+    # NOTE: No direct events - triggered by job orchestrator
     environment:
       AI_PROVIDER: ${file(.env.${opt:stage, 'dev'}.json):AI_PROVIDER}
       AI_MODEL: ${file(.env.${opt:stage, 'dev'}.json):AI_MODEL}
@@ -294,6 +270,19 @@ functions:
                 ticker: true
                 limit: false
                 type: false
+
+  # Get Orchestrator Locks - Production
+  # Returns all current orchestrator locks for debugging/monitoring
+  # Shows active, expired, and released locks to troubleshoot concurrency issues
+  # Production: Yes - Debugging and monitoring tool
+  getOrchestratorLocks:
+    handler: src/handlers/api/get-orchestrator-locks.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/orchestrator-locks
+          method: get
+          cors: true
 
   # Trigger Universe Build - Production
   # Manually triggers the daily universe building process
@@ -568,7 +557,7 @@ functions:
     timeout: 30
     events:
       - http:
-          path: /api/trigger-market-research
+          path: /api/trigger/market-research
           method: post
           cors: true
 
@@ -658,26 +647,6 @@ functions:
     handler: src/handlers/workers/universe-ranking-worker.handler
     timeout: 300 # 5 minutes for ranking
 
-  # # Scheduled trigger for universe build (cron wrapper)
-  # universeBuildScheduled:
-  #   handler: src/handlers/scheduled/scheduled-universe-build-cron.handler
-  #   timeout: 30 # Quick invocation only
-  #   events:
-  #     - schedule: cron(0 3 * * ? *) # 3:00 UTC daily (11:00 PM ET)
-
-  # # Scheduled trigger for discovery ingestion (cron wrapper)
-  # discoveryIngestion:
-  #   handler: src/handlers/scheduled/discovery-ingestion.handler
-  #   timeout: 30 # Quick invocation only
-  #   events:
-  #     - schedule: cron(0 0,6,12,18 * * ? *) # Every 6 hours at 00:00, 06:00, 12:00, 18:00 UTC
-
-  # universeRanking:
-  #   handler: src/handlers/scheduled/universe-ranking.handler
-  #   timeout: 300 # 5 minutes for ranking
-  #   events:
-  #     - schedule: cron(0 4 * * ? *) # 4 AM ET (9 PM UTC) - After universe build, before research
-
   # Initialize Job Orchestration - Production
   # Sets up the job orchestration system with initial job configurations
   # Used for system setup and job management initialization
@@ -689,8 +658,27 @@ functions:
       - http:
           path: /api/initialize/job-orchestration
           method: post
+
+  # Toggle Orchestration - Production
+  # Enable/disable the job orchestration system
+  # Used for emergency shutdown or maintenance
+  # Production: Yes - System control
+  toggleOrchestration:
+    handler: src/handlers/api/toggle-orchestration.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/orchestration/toggle
+          method: get
           cors: true
-    name: chatgpt-trading-phase1-dev-initializeJobOrchestration
+      - http:
+          path: /api/orchestration/toggle
+          method: post
+          cors: true
+      - http:
+          path: /api/orchestration/toggle
+          method: put
+          cors: true
 
   # Job Orchestrator - Production
   # Runs every minute to check for and execute scheduled jobs

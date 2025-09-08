@@ -1,126 +1,13 @@
 /**
- * Email Report Lambda Handler
- * Generates and sends daily email reports
- * Summarizes trading activity, portfolio performance, and key metrics
+ * Email Report Orchestrator
+ * Shared function for both manual and scheduled email report generation
  */
 
-const PortfolioService = require("../../services/portfolio-service");
-const AIService = require("../../services/ai-service");
-const ReportService = require("../../services/report-service");
+const PortfolioService = require("../portfolio-service");
+const AIService = require("../ai-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
-const {
-  validateEnvironment,
-  getEnvConfig,
-} = require("../../config/environment");
 const AWS = require("aws-sdk");
-const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
-
-let logger;
-let errorHandler;
-
-/**
- * Lambda handler for email report generation and delivery
- */
-const baseHandler = async (event, context) => {
-  // Initialize services
-  logger = new Logger("email-report");
-  errorHandler = new ErrorHandler("email-report");
-
-  try {
-    // Log function start
-    logger.logLambdaStart(event, context);
-
-    // Validate environment
-    validateEnvironment();
-
-    logger.info("Starting daily email report generation");
-
-    // Initialize services
-    const portfolioService = new PortfolioService();
-    const envConfig = getEnvConfig();
-
-    // Initialize SES
-    const ses = new AWS.SES({ region: envConfig.sesRegion });
-
-    // 1. Get current portfolio data
-    logger.info("Fetching portfolio data for report");
-    const portfolio = await portfolioService.getCurrentPortfolio();
-
-    // 2. Get recent trading history (last 7 days)
-    logger.info("Fetching recent trading history");
-    const recentTrades = await portfolioService.getTradingHistory(7);
-
-    // 3. Generate base report content
-    const reportData = {
-      date: new Date().toISOString().split("T")[0],
-      portfolio,
-      recentTrades,
-      summary: generatePortfolioSummary(portfolio, recentTrades),
-    };
-
-    let emailContent = generateHTMLEmailContent(reportData);
-
-    // 3b. Optionally append AI human-readable report and persist
-    if (process.env.ENABLE_AI_HUMAN_REPORTS === "true") {
-      try {
-        const aiService = new AIService();
-        const { content: aiContent } = await aiService.getHumanReport({
-          period: "daily",
-          portfolio,
-          recentTrades,
-          persist: true,
-        });
-
-        emailContent = emailContent.replace(
-          "</body>",
-          `
-        <!-- AI Analysis Section -->
-        <div style="padding: 0 20px 30px;">
-            <h3 style="color: #1e3a8a; font-size: 20px; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">AI STRATEGY ANALYSIS & MARKET RATIONALE</h3>
-            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; white-space: pre-line; font-family: 'Courier New', monospace; font-size: 14px; line-height: 1.5;">
-                ${aiContent.replace(/\n/g, "<br>")}
-            </div>
-        </div>
-</body>`
-        );
-      } catch (e) {
-        logger.warn("AI human report generation failed", e);
-      }
-    }
-
-    // 4. Send email
-    logger.info("Sending email report");
-    await sendEmailReport(ses, envConfig, emailContent, reportData);
-
-    logger.info("Daily email report sent successfully", {
-      recipient: envConfig.adminEmail,
-      portfolioValue: portfolio.totalValue,
-      recentTrades: recentTrades.length,
-    });
-
-    // Log function end
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        message: "Email report sent successfully",
-        recipient: envConfig.adminEmail,
-        portfolioValue: portfolio.totalValue,
-        timestamp: new Date().toISOString(),
-      }),
-    };
-  } catch (error) {
-    logger.error("Email report generation failed", error);
-    await errorHandler.sendErrorAlert(error, { function: "email-report" });
-
-    // Log function end with error
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
-
-    throw error;
-  }
-};
 
 /**
  * Generate portfolio summary statistics
@@ -446,6 +333,38 @@ function generateHTMLEmailContent(reportData) {
 }
 
 /**
+ * Send email report via SES
+ */
+async function sendEmailReport(ses, envConfig, emailContent, reportData) {
+  const params = {
+    Source: envConfig.sesSenderEmail,
+    Destination: {
+      ToAddresses: [envConfig.adminEmail],
+    },
+    Message: {
+      Subject: {
+        Data: `Micro-Cap Trading Performance Report - ${reportData.date}`,
+      },
+      Body: {
+        Html: {
+          Data: emailContent,
+        },
+        Text: {
+          Data: generateEmailContent(reportData),
+        },
+      },
+    },
+  };
+
+  try {
+    const result = await ses.sendEmail(params).promise();
+    return result;
+  } catch (error) {
+    throw new Error(`Email delivery failed: ${error.message}`);
+  }
+}
+
+/**
  * Generate email content in text format
  */
 function generateEmailContent(reportData) {
@@ -546,40 +465,117 @@ ${"=".repeat(60)}
 }
 
 /**
- * Send email report via SES
+ * Execute email report generation with consistent orchestration
+ * @param {Object} options - Configuration options
+ * @param {string} options.invocationType - 'manual' or 'scheduled'
+ * @param {Object} options.logger - Optional logger instance
+ * @param {Object} options.errorHandler - Optional error handler instance
+ * @returns {Promise<Object>} Email report results
  */
-async function sendEmailReport(ses, envConfig, emailContent, reportData) {
-  const params = {
-    Source: envConfig.sesSenderEmail,
-    Destination: {
-      ToAddresses: [envConfig.adminEmail],
-    },
-    Message: {
-      Subject: {
-        Data: `Micro-Cap Trading Performance Report - ${reportData.date}`,
-      },
-      Body: {
-        Html: {
-          Data: emailContent,
-        },
-        Text: {
-          Data: generateEmailContent(reportData),
-        },
-      },
-    },
-  };
+async function performEmailReport(options = {}) {
+  const { invocationType = "manual", logger, errorHandler } = options;
+
+  // Use provided logger/errorHandler or create new ones
+  const logInstance = logger || new Logger(`email-report-${invocationType}`);
+  const errorHandlerInstance =
+    errorHandler || new ErrorHandler(`email-report-${invocationType}`);
 
   try {
-    const result = await ses.sendEmail(params).promise();
-    logger.info("Email sent successfully", {
-      messageId: result.MessageId,
+    // Log function start
+    logInstance.info(`📧 Starting ${invocationType} email report generation`);
+
+    // Initialize services
+    const portfolioService = new PortfolioService();
+    const envConfig = require("../../config/environment").getEnvConfig();
+
+    // Initialize SES
+    const ses = new AWS.SES({ region: envConfig.sesRegion });
+
+    // 1. Get current portfolio data
+    logInstance.info("Fetching portfolio data for report");
+    const portfolio = await portfolioService.getCurrentPortfolio();
+
+    // 2. Get recent trading history (last 7 days)
+    logInstance.info("Fetching recent trading history");
+    const recentTrades = await portfolioService.getTradingHistory(7);
+
+    // 3. Generate base report content
+    const reportData = {
+      date: new Date().toISOString().split("T")[0],
+      portfolio,
+      recentTrades,
+      summary: generatePortfolioSummary(portfolio, recentTrades),
+    };
+
+    let emailContent = generateHTMLEmailContent(reportData);
+
+    // 3b. Optionally append AI human-readable report and persist
+    if (process.env.ENABLE_AI_HUMAN_REPORTS === "true") {
+      try {
+        const aiService = new AIService();
+        const { content: aiContent } = await aiService.getHumanReport({
+          period: "daily",
+          portfolio,
+          recentTrades,
+          persist: true,
+        });
+
+        emailContent = emailContent.replace(
+          "</body>",
+          `
+        <!-- AI Analysis Section -->
+        <div style="padding: 0 20px 30px;">
+            <h3 style="color: #1e3a8a; font-size: 20px; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">AI STRATEGY ANALYSIS & MARKET RATIONALE</h3>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; white-space: pre-line; font-family: 'Courier New', monospace; font-size: 14px; line-height: 1.5;">
+                ${aiContent.replace(/\n/g, "<br>")}
+            </div>
+        </div>
+</body>`
+        );
+      } catch (e) {
+        logInstance.warn("AI human report generation failed", e);
+      }
+    }
+
+    // 4. Send email
+    logInstance.info("Sending email report");
+    await sendEmailReport(ses, envConfig, emailContent, reportData);
+
+    logInstance.info("✅ Email report sent successfully", {
       recipient: envConfig.adminEmail,
+      portfolioValue: portfolio.totalValue,
+      recentTrades: recentTrades.length,
     });
-    return result;
+
+    return {
+      recipient: envConfig.adminEmail,
+      portfolioValue: portfolio.totalValue,
+      recentTradesCount: recentTrades.length,
+      timestamp: new Date().toISOString(),
+    };
   } catch (error) {
-    logger.error("Failed to send email", error);
-    throw new Error(`Email delivery failed: ${error.message}`);
+    logInstance.error(`Email report generation failed`, error);
+
+    // Send error alert if error handler provided
+    if (errorHandlerInstance) {
+      try {
+        await errorHandlerInstance.sendErrorAlert(error, {
+          function: `email-report-${invocationType}`,
+          operation: "email_report_generation",
+        });
+      } catch (alertError) {
+        logInstance.error("Failed to send error alert", alertError);
+      }
+    }
+
+    throw error;
   }
 }
 
-module.exports.handler = withScheduledLogFlushing(baseHandler, "email-report");
+module.exports = {
+  performEmailReport,
+  generatePortfolioSummary,
+  generateHTMLEmailContent,
+  generateEmailContent,
+  sendEmailReport,
+};

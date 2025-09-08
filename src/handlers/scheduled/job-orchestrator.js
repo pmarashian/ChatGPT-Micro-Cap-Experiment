@@ -10,12 +10,16 @@ const {
 } = require("../../utils/handler-wrapper");
 const {
   createLambdaClient,
-  invokeLambdaFunction,
+  invokeLambdaFunctionSync,
 } = require("../../utils/lambda-client");
 const {
   getJobsToRun,
   updateJobStatus,
   handleTimedOutJobs,
+  acquireOrchestratorLock,
+  deleteOrchestratorLock,
+  completeJobExecution,
+  isOrchestrationEnabled,
 } = require("../../services/job-orchestration-service");
 
 /**
@@ -32,47 +36,90 @@ function generateExecutionId() {
 const businessLogic = async ({ logger, errorHandler }) => {
   const executionId = generateExecutionId();
 
-  // logger.debug("Starting job orchestration cycle", { executionId });
+  logger.debug("Starting job orchestration cycle", { executionId });
 
   try {
-    // 1. Handle any timed-out jobs from previous runs
-    await handleTimedOutJobs(logger);
+    // 1. Check if orchestration is enabled
+    const orchestrationEnabled = await isOrchestrationEnabled(logger);
 
-    // 2. Get jobs that need to run (excludes running jobs)
-    const jobsToRun = await getJobsToRun(logger);
-
-    if (jobsToRun.length === 0) {
-      logger.debug("No jobs to run this cycle", { executionId });
+    if (!orchestrationEnabled) {
+      logger.debug("Orchestration is disabled, skipping this cycle", {
+        executionId,
+      });
       return null;
     }
 
-    console.log("jobsToRun", jobsToRun);
+    // 2. Try to acquire orchestrator lock to prevent concurrent execution
+    const lockResult = await acquireOrchestratorLock(logger);
 
-    // 3. Execute jobs in parallel (up to concurrency limit)
-    const maxConcurrency = parseInt(process.env.MAX_JOB_CONCURRENCY || "3");
-    const executionPromises = [];
-
-    for (let i = 0; i < Math.min(jobsToRun.length, maxConcurrency); i++) {
-      const job = jobsToRun[i];
-      executionPromises.push(executeJob(job, executionId, logger));
+    if (!lockResult.success) {
+      logger.debug(
+        "Another orchestrator instance is already running, skipping this cycle",
+        {
+          executionId,
+        }
+      );
+      return null;
     }
 
-    // Wait for all jobs to complete
-    const results = await Promise.allSettled(executionPromises);
+    const orchestratorExecutionId = lockResult.executionId;
 
-    // Log results
-    const successful = results.filter((r) => r.status === "fulfilled").length;
-    const failed = results.filter((r) => r.status === "rejected").length;
+    try {
+      // 2. Handle any timed-out jobs from previous runs
+      await handleTimedOutJobs(logger);
 
-    logger.debug("Job orchestration cycle completed", {
-      executionId,
-      totalJobs: jobsToRun.length,
-      executedJobs: executionPromises.length,
-      successful,
-      failed,
-    });
+      // 3. Get jobs that need to run (excludes running jobs)
+      const jobsToRun = await getJobsToRun(logger);
 
-    return null;
+      if (jobsToRun.length === 0) {
+        logger.debug("No jobs to run this cycle", {
+          executionId,
+          orchestratorExecutionId,
+        });
+        return null;
+      }
+
+      logger.debug(`Found ${jobsToRun.length} jobs to run`, {
+        executionId,
+        orchestratorExecutionId,
+        jobs: jobsToRun.map((j) => j.jobName),
+      });
+
+      // 4. Execute jobs in parallel (up to concurrency limit)
+      const maxConcurrency = parseInt(process.env.MAX_JOB_CONCURRENCY || "1");
+      const executionPromises = [];
+
+      for (let i = 0; i < Math.min(jobsToRun.length, maxConcurrency); i++) {
+        const job = jobsToRun[i];
+        console.log("--------------------------------");
+        console.log("Executing job", job.jobName);
+        console.log("--------------------------------");
+        executionPromises.push(
+          executeJob(job, orchestratorExecutionId, logger)
+        );
+      }
+
+      // Wait for all job invocations to complete
+      const results = await Promise.allSettled(executionPromises);
+
+      // Log results
+      const successful = results.filter((r) => r.status === "fulfilled").length;
+      const failed = results.filter((r) => r.status === "rejected").length;
+
+      logger.info("Job orchestration cycle completed", {
+        executionId,
+        orchestratorExecutionId,
+        totalJobs: jobsToRun.length,
+        executedJobs: executionPromises.length,
+        successful,
+        failed,
+      });
+
+      return null;
+    } finally {
+      // Always delete the lock
+      await deleteOrchestratorLock(orchestratorExecutionId, logger);
+    }
   } catch (error) {
     logger.error("Job orchestration cycle failed", { executionId, error });
     throw error;
@@ -94,7 +141,8 @@ async function executeJob(job, orchestrationExecutionId, logger) {
   });
 
   try {
-    // 1. Mark job as running
+    // 1. Mark job as running (worker will handle completion status)
+    console.log("Marking job as running", jobName);
     await updateJobStatus(jobName, "running", jobExecutionId);
 
     // 2. Create Lambda client
@@ -115,40 +163,99 @@ async function executeJob(job, orchestrationExecutionId, logger) {
       },
     };
 
-    // 4. Invoke the worker Lambda function
-    logger.debug(`Invoking worker function`, {
+    // 4. Invoke the worker Lambda function synchronously
+    console.log("Invoking worker function synchronously", job.targetFunction);
+    logger.debug(`Invoking worker function synchronously`, {
       jobName,
       targetFunction: job.targetFunction,
       jobExecutionId,
     });
 
-    const result = await invokeLambdaFunction(
+    const result = await invokeLambdaFunctionSync(
       job.targetFunction,
       payload,
       lambda
     );
 
-    logger.debug(`Worker function invoked successfully`, {
-      jobName,
-      jobExecutionId,
-      requestId: result.$response.requestId,
+    console.log("Worker function completed", job.targetFunction, {
       statusCode: result.StatusCode,
+      hasOrchestrationInfo: !!result.payload?._orchestration,
     });
 
-    // 5. Mark job as completed (we don't wait for the async function to complete)
-    await updateJobStatus(jobName, "completed", jobExecutionId);
-
-    logger.debug(`Job execution completed`, {
+    logger.debug(`Worker function completed`, {
       jobName,
       jobExecutionId,
-      targetFunction: job.targetFunction,
+      statusCode: result.StatusCode,
+      hasOrchestrationInfo: !!result.payload?._orchestration,
     });
 
-    return {
-      jobName,
-      status: "success",
-      executionId: jobExecutionId,
-    };
+    // 5. Handle job completion centrally
+    if (result.StatusCode === 200 && result.payload?._orchestration) {
+      // Worker completed successfully with orchestration info
+      const orchInfo = result.payload._orchestration;
+      await completeJobExecution(jobName, jobExecutionId, true, null, logger);
+
+      logger.info(`Job completed successfully via centralized orchestration`, {
+        jobName,
+        jobExecutionId,
+        orchestrationExecutionId,
+        workerStatus: orchInfo.status,
+      });
+
+      return {
+        jobName,
+        status: "completed",
+        executionId: jobExecutionId,
+      };
+    } else if (result.payload?._orchestration?.status === "failed") {
+      // Worker failed with orchestration info
+      const orchInfo = result.payload._orchestration;
+      const workerError = new Error(
+        orchInfo.originalError || "Worker reported failure"
+      );
+
+      await completeJobExecution(
+        jobName,
+        jobExecutionId,
+        false,
+        workerError,
+        logger
+      );
+
+      logger.error(`Job failed via centralized orchestration`, {
+        jobName,
+        jobExecutionId,
+        orchestrationExecutionId,
+        workerStatus: orchInfo.status,
+        error: workerError.message,
+      });
+
+      throw workerError;
+    } else {
+      // Lambda execution failed or no orchestration info
+      const executionError = new Error(
+        `Worker execution failed: Status ${result.StatusCode}, ${
+          result.payload?.message || "Unknown error"
+        }`
+      );
+
+      await completeJobExecution(
+        jobName,
+        jobExecutionId,
+        false,
+        executionError,
+        logger
+      );
+
+      logger.error(`Job execution failed`, {
+        jobName,
+        jobExecutionId,
+        statusCode: result.StatusCode,
+        error: executionError.message,
+      });
+
+      throw executionError;
+    }
   } catch (error) {
     logger.error(`Job execution failed`, {
       jobName,
@@ -157,11 +264,11 @@ async function executeJob(job, orchestrationExecutionId, logger) {
       targetFunction: job.targetFunction,
     });
 
-    // Mark job as failed
+    // Handle job completion centrally
     try {
-      await updateJobStatus(jobName, "failed", jobExecutionId, error);
+      await completeJobExecution(jobName, jobExecutionId, false, error, logger);
     } catch (statusError) {
-      logger.error(`Failed to update job status to failed`, {
+      logger.error(`Failed to complete job execution`, {
         jobName,
         jobExecutionId,
         statusError: statusError.message,

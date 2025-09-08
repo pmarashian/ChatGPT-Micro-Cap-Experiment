@@ -21,7 +21,7 @@ function createLambdaClient() {
 }
 
 /**
- * Invoke a Lambda function asynchronously
+ * Invoke a Lambda function asynchronously (for manual/API triggers)
  * @param {string} functionName - Name of the function to invoke
  * @param {Object} payload - Payload to send to the function
  * @param {AWS.Lambda} lambdaClient - Lambda client instance (optional)
@@ -48,7 +48,45 @@ async function invokeLambdaFunction(
   return await client.invoke(params).promise();
 }
 
+/**
+ * Invoke a Lambda function synchronously (for orchestration)
+ * Waits for completion and returns the result
+ * @param {string} functionName - Name of the function to invoke
+ * @param {Object} payload - Payload to send to the function
+ * @param {AWS.Lambda} lambdaClient - Lambda client instance (optional)
+ * @returns {Promise<Object>} Lambda invocation result with payload
+ */
+async function invokeLambdaFunctionSync(
+  functionName,
+  payload = {},
+  lambdaClient = null
+) {
+  const client = lambdaClient || createLambdaClient();
+
+  const params = {
+    FunctionName: functionName,
+    InvocationType: "RequestResponse", // Synchronous invocation
+    Payload: JSON.stringify(payload),
+  };
+
+  const result = await client.invoke(params).promise();
+
+  // Parse the response payload
+  let responsePayload;
+  try {
+    responsePayload = JSON.parse(result.Payload);
+  } catch (parseError) {
+    responsePayload = result.Payload;
+  }
+
+  return {
+    ...result,
+    payload: responsePayload,
+  };
+}
+
 module.exports = {
   createLambdaClient,
   invokeLambdaFunction,
+  invokeLambdaFunctionSync,
 };

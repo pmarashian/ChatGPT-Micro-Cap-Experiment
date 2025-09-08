@@ -32,7 +32,13 @@ module.exports.logProcessor = async (event) => {
     }
 
     if (isOffline) {
-      console.log(logs);
+      for (const log of logs) {
+        if (log.level === "info") {
+          console.log(
+            `${log.level.toUpperCase()} [${log.context}] ${log.message}`
+          );
+        }
+      }
       return;
     }
 

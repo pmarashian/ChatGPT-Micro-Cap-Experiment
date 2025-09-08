@@ -1,37 +1,34 @@
 /**
- * Market Research Handler
- * Performs intensive AI research on micro-cap biotech sector
- * Runs every 12 hours with 10-minute timeout for deep analysis
+ * Market Research Orchestrator
+ * Shared function for both manual and scheduled market research execution
  */
 
-const AIService = require("../../services/ai-service");
-const AIMemoryService = require("../../services/ai-memory-service");
-const MarketDataService = require("../../services/market-data-service");
+const AIService = require("../ai-service");
+const AIMemoryService = require("../ai-memory-service");
+const MarketDataService = require("../market-data-service");
+const PortfolioService = require("../portfolio-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
-const { validateEnvironment } = require("../../config/environment");
-const { withScheduledLogFlushing } = require("../../utils/handler-wrapper");
-
-let logger;
-let errorHandler;
 
 /**
- * Scheduled Lambda handler for market research
- * Runs every 12 hours to perform deep AI analysis
+ * Execute market research with consistent orchestration
+ * @param {Object} options - Configuration options
+ * @param {string} options.invocationType - 'manual' or 'scheduled'
+ * @param {Object} options.logger - Optional logger instance
+ * @param {Object} options.errorHandler - Optional error handler instance
+ * @returns {Promise<Object>} Research results
  */
-const baseHandler = async (event, context) => {
-  // Initialize services
-  logger = new Logger("market-research");
-  errorHandler = new ErrorHandler("market-research");
+async function performMarketResearch(options = {}) {
+  const { invocationType = "manual", logger, errorHandler } = options;
+
+  // Use provided logger/errorHandler or create new ones
+  const logInstance = logger || new Logger(`market-research-${invocationType}`);
+  const errorHandlerInstance =
+    errorHandler || new ErrorHandler(`market-research-${invocationType}`);
 
   try {
     // Log function start
-    logger.logLambdaStart(event, context);
-
-    // Validate environment
-    validateEnvironment();
-
-    logger.info("🚀 Starting comprehensive market research analysis");
+    logInstance.info(`🚀 Starting ${invocationType} market research analysis`);
 
     // Initialize services
     const aiService = new AIService();
@@ -39,16 +36,17 @@ const baseHandler = async (event, context) => {
     const marketDataService = new MarketDataService();
 
     // Step 1: Load historical context and current portfolio
-    logger.info("📚 Step 1: Loading historical context and portfolio data");
+    logInstance.info(
+      "📚 Step 1: Loading historical context and portfolio data"
+    );
     const aiContext = await memoryService.buildAIContext();
 
     // Get current portfolio (minimal data for research context)
-    const portfolioService = require("../../services/portfolio-service");
-    const portfolioSvc = new portfolioService();
-    const currentPortfolio = await portfolioSvc.getCurrentPortfolio();
+    const portfolioService = new PortfolioService();
+    const currentPortfolio = await portfolioService.getCurrentPortfolio();
 
     // Step 2: Fetch comprehensive market data
-    logger.info("📊 Step 2: Fetching comprehensive market data");
+    logInstance.info("📊 Step 2: Fetching comprehensive market data");
     const marketData = await marketDataService.getPortfolioMarketData(
       currentPortfolio
     );
@@ -57,15 +55,7 @@ const baseHandler = async (event, context) => {
     await memoryService.saveMarketData(marketData);
 
     // Step 3: Generate deep research analysis
-    logger.info("🧠 Step 3: Performing deep AI research analysis");
-
-    // TODO: Enhance market-research to actively follow up on RESEARCH actions
-    // Currently RESEARCH actions from trading decisions are tracked in AI memory
-    // but not specifically targeted for follow-up analysis. Future enhancement:
-    // - Query AI memory for recent RESEARCH decisions
-    // - Include those tickers in focused research prompts
-    // - Generate deeper analysis for tickers flagged as needing research
-    // - Update decision status from RESEARCH to BUY/HOLD/SELL after analysis
+    logInstance.info("🧠 Step 3: Performing deep AI research analysis");
 
     // Create focused research prompt (without trading decisions)
     const researchPrompt = aiService.buildResearchPrompt(
@@ -81,7 +71,7 @@ const baseHandler = async (event, context) => {
     const parsedResearch = aiService.parseResearchResponse(researchResponse);
 
     // Step 4: Save comprehensive research findings
-    logger.info("💾 Step 4: Saving research findings to memory");
+    logInstance.info("💾 Step 4: Saving research findings to memory");
 
     await memoryService.saveAIResearch({
       ...parsedResearch,
@@ -106,7 +96,7 @@ const baseHandler = async (event, context) => {
 
       if (discoveries.length > 0) {
         await memoryService.saveDiscoveredTickersWithQuality(discoveries);
-        logger.info(
+        logInstance.info(
           `Saved ${discoveries.length} discoveries with quality scores`,
           {
             discoveries: discoveries.map((d) => ({
@@ -120,15 +110,17 @@ const baseHandler = async (event, context) => {
     }
 
     // Step 5: Update portfolio configuration if needed
-    logger.info("⚙️ Step 5: Reviewing and updating portfolio configuration");
+    logInstance.info(
+      "⚙️ Step 5: Reviewing and updating portfolio configuration"
+    );
 
     const portfolioConfig = await memoryService.getPortfolioConfig();
     // AI could suggest configuration changes based on research
     // For now, just log current config
-    logger.info("Current portfolio configuration", portfolioConfig);
+    logInstance.info("Current portfolio configuration", portfolioConfig);
 
     // Step 6: Generate research summary report
-    logger.info("📋 Step 6: Generating research summary report");
+    logInstance.info("📋 Step 6: Generating research summary report");
 
     const researchSummary = {
       timestamp: new Date().toISOString(),
@@ -138,44 +130,34 @@ const baseHandler = async (event, context) => {
       newDiscoveries: parsedResearch.newDiscoveries?.length || 0,
       keyFindings: parsedResearch.researchSummary,
       nextResearchFocus: parsedResearch.nextResearchFocus,
-      processingTime: Date.now() - context.getRemainingTimeInMillis(),
+      processingTime: "completed", // This would be calculated based on actual timing
     };
 
-    logger.info("✅ Market research completed successfully", researchSummary);
+    logInstance.info(
+      "✅ Market research completed successfully",
+      researchSummary
+    );
 
-    // Log function end
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        message: "Market research completed successfully",
-        researchSummary,
-        timestamp: new Date().toISOString(),
-      }),
-    };
+    return researchSummary;
   } catch (error) {
-    logger.error("Market research failed", error);
-    await errorHandler.sendErrorAlert(error, {
-      function: "market-research",
-      researchType: "scheduled_comprehensive",
-    });
+    logInstance.error(`Market research failed`, error);
 
-    // Log function end with error
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
-
-    // Force flush all remaining logs before throwing error
-    try {
-      await logger.flush();
-    } catch (flushError) {
-      // Silent fail - don't let flush errors mask the original error
+    // Send error alert if error handler provided
+    if (errorHandlerInstance) {
+      try {
+        await errorHandlerInstance.sendErrorAlert(error, {
+          function: `market-research-${invocationType}`,
+          researchType: "scheduled_comprehensive",
+        });
+      } catch (alertError) {
+        logInstance.error("Failed to send error alert", alertError);
+      }
     }
 
     throw error;
   }
-};
+}
 
-module.exports.handler = withScheduledLogFlushing(
-  baseHandler,
-  "market-research"
-);
+module.exports = {
+  performMarketResearch,
+};

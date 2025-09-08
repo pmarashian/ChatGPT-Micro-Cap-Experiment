@@ -1,3 +1,31 @@
+# Cursor Rules - Trading System Architecture
+
+## Cursor MDC Rules
+
+This project uses Cursor's Markdown Cursor (.mdc) rule files for documentation and code guidance. All rule files must follow the proper MDC format:
+
+### MDC Rule Structure
+```yaml
+---
+description: "Brief description of the rule's purpose"
+globs:
+alwaysApply: false
+---
+
+# Rule Title
+
+Rule content in Markdown format...
+```
+
+### Available Rules
+- `.cursor/rules/job-orchestration-pattern.mdc` - Complete implementation guide for job orchestration
+- `.cursor/rules/worker-patterns.mdc` - Worker implementation patterns and best practices
+- `.cursor/rules/orchestration-quick-reference.mdc` - Quick reference for job orchestration
+- `.cursor/rules/mdc-rule-structure.mdc` - Documentation for creating new MDC rules
+- `.cursor/rules/development-best-practices.mdc` - Development workflow and process management guidelines
+
+---
+
 # Job Orchestration Pattern - Trading System Architecture
 
 ## Overview
@@ -17,9 +45,9 @@ This project implements a sophisticated job orchestration pattern for serverless
 ├─────────────────┤
 │ Job Orchestrator│ ← Scheduled execution
 ├─────────────────┤
-│  Worker Layer   │ ← Pure business logic
+│  Worker Layer   │ ← Pure business logic (NEW)
 ├─────────────────┤
-│ Orchestrators   │ ← Business logic coordination
+│ Orchestrators   │ ← Business logic coordination (NEW)
 ├─────────────────┤
 │   Services      │ ← Data access & external APIs
 └─────────────────┘
@@ -30,11 +58,22 @@ This project implements a sophisticated job orchestration pattern for serverless
 - **Single item per job** with all configuration and status
 - **Automatic status tracking** and timeout handling
 - **Transparent orchestration** via wrapper functions
+- **Worker files in `workers/` folder** - pure business logic
+- **Orchestrator services** - shared business logic for manual + scheduled execution
+- **Job orchestrator invokes workers** - not scheduled handlers
 
 ## Key Components
 
 ### Handler Wrapper Functions
 - `withApiTriggerLifecycle` - Fire-and-forget Lambda invocation
+- `withJobOrchestratedHandlerLifecycle` - Business logic with orchestration support
+
+### Worker Pattern (CRITICAL)
+- **Scheduled handlers should NOT be modified** - they remain as-is for backward compatibility
+- **New worker files go in `src/handlers/workers/`** - pure business logic only
+- **Orchestrator services go in `src/services/trading/`** - shared business logic
+- **Job orchestrator invokes worker functions** - not scheduled handlers
+- **Workers use `withJobOrchestratedHandlerLifecycle`** - automatic job status updates
 - `withJobOrchestratedHandlerLifecycle` - Business logic + orchestration
 - `withScheduledHandlerLifecycle` - Basic scheduled execution
 
@@ -93,7 +132,8 @@ POST /api/initialize/job-orchestration
 For comprehensive documentation, see:
 - `.cursor/rules/job-orchestration-pattern.mdc` - Complete implementation guide
 - `.cursor/rules/worker-patterns.mdc` - Worker implementation patterns
-- `.cursor/rules/orchestration-service.mdc` - Job orchestration service API
+- `.cursor/rules/orchestration-quick-reference.mdc` - Quick reference for job orchestration
+- `.cursor/rules/development-best-practices.mdc` - Development workflow and process management
 
 ## Migration Notes
 
@@ -124,6 +164,14 @@ jobOrchestrator:
 4. **Initialize jobs** after deployment
 5. **Monitor orchestration logs** for system health
 6. **Test business logic separately** from orchestration
+
+## Development Best Practices
+
+### Process Management
+- **Clean up local processes**: When running `serverless offline`, ALWAYS kill the process when done
+- **Background processes**: Use `Ctrl+C` or process termination commands to stop running servers
+- **Resource management**: Don't leave development processes running unnecessarily
+- **Terminal hygiene**: Keep terminals clean by properly terminating background processes
 
 ## Quick Reference
 
