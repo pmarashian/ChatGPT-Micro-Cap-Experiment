@@ -3,110 +3,13 @@
  * Manually invokes the universe build scheduled function
  */
 
-const Logger = require("../../utils/logger");
-const ErrorHandler = require("../../utils/error-handler");
 const { validateEnvironment } = require("../../config/environment");
-const {
-  createLambdaClient,
-  invokeLambdaFunction,
-} = require("../../utils/lambda-client");
+const { withApiTriggerLifecycle } = require("../../utils/handler-wrapper");
 
-const { withApiLogFlushing } = require("../../utils/handler-wrapper");
-
-let logger;
-let errorHandler;
-let lambda;
-
-/**
- * API handler for triggering universe build manually
- */
-const baseHandler = async (event, context) => {
-  // Initialize services
-  logger = new Logger("trigger-universe-build");
-  errorHandler = new ErrorHandler("trigger-universe-build");
-
-  try {
-    // Log function start
-    logger.logLambdaStart(event, context);
-
-    // Validate environment
-    validateEnvironment();
-
-    // Initialize Lambda client
-    lambda = createLambdaClient();
-
-    logger.info("Manually triggering universe build");
-
-    // Get function name from environment
-    const functionName =
-      process.env.UNIVERSE_BUILD_FUNCTION_NAME ||
-      `${process.env.SERVICE_NAME}-${process.env.STAGE}-universeBuild`;
-
-    // Invoke the universe build function
-    const result = await invokeLambdaFunction(functionName, {}, lambda);
-
-    logger.info("Universe build triggered successfully", {
-      functionName: functionName,
-      requestId: result.$response.requestId,
-      statusCode: result.StatusCode,
-    });
-
-    // Log function end
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
-
-    return {
-      statusCode: 202, // Accepted - asynchronous operation
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-      body: JSON.stringify({
-        success: true,
-        message: "Universe build triggered successfully",
-        functionName: functionName,
-        requestId: result.$response.requestId,
-        timestamp: new Date().toISOString(),
-      }),
-    };
-  } catch (error) {
-    logger.error("Failed to trigger universe build", error);
-
-    // Send error alert
-    try {
-      await errorHandler.sendErrorAlert(error, {
-        function: "trigger-universe-build",
-        operation: "manual_api_trigger",
-      });
-    } catch (alertError) {
-      logger.error("Failed to send error alert", alertError);
-    }
-
-    // Log function end with error
-    logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis(), false);
-
-    // Force flush all remaining logs before throwing error
-    try {
-      await logger.flush();
-    } catch (flushError) {
-      // Silent fail - don't let flush errors mask the original error
-    }
-
-    return {
-      statusCode: 500,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-      body: JSON.stringify({
-        error: "Failed to trigger universe build",
-        message: error.message,
-      }),
-    };
-  }
-};
-
-// Wrap the handler with automatic log flushing
-module.exports.handler = withApiLogFlushing(
-  baseHandler,
-  "trigger-universe-build"
-);
+// Wrap the handler with trigger lifecycle management
+module.exports.handler = withApiTriggerLifecycle({
+  triggerHandlerName: "trigger-universe-build",
+  targetFunctionName: `${process.env.SERVICE_NAME}-${process.env.STAGE}-universeBuildWorker`,
+  operation: "manual_api_trigger",
+  validateEnvironment: validateEnvironment,
+});

@@ -1,33 +1,144 @@
----
-description: Senior Engineer Task Execution Rule – enforce disciplined, production-grade task execution for all engineering work
-globs: "*"
-alwaysApply: true
----
+# Job Orchestration Pattern - Trading System Architecture
 
-- **You are a senior engineer responsible for high-leverage, production-safe changes.**
-  - Do not improvise, over-engineer, or deviate from the plan.
-- **Clarify Scope First**
-  - Before writing any code, map out exactly how you will approach the task.
-  - Confirm your interpretation of the objective.
-  - Write a clear plan showing what files and functions will be touched and why.
-  - Do not begin implementation until this is done and reasoned through.
-- **Locate Exact Code Insertion Point**
-  - Identify the precise file(s) and line(s) where the change will live (usually in src/app/ or src/app/api/).
-  - Never make sweeping edits across unrelated files.
-  - If multiple files are needed, justify each inclusion explicitly.
-  - Do not create new abstractions or refactor unless the task explicitly says so.
-- **Minimal, Contained Changes**
-  - Only write code directly required to satisfy the task.
-  - Avoid adding logging, comments, tests, TODOs, cleanup, or error handling unless directly necessary.
-  - **No Unspecified Game Mechanics**: Do not introduce game mechanics (e.g., resource limits, new stats) that are not explicitly defined in the PRD. If the PRD is ambiguous, ask for clarification before implementing.
-  - No speculative changes or "while we're here" edits.
-  - All logic should be isolated to not break existing flows.
-- **Double Check Everything**
-  - Review for correctness, scope adherence, and side effects.
-  - Ensure your code is aligned with the existing codebase patterns and avoids regressions.
-  - Explicitly verify whether anything downstream will be impacted.
-- **Deliver Clearly**
-  - Summarize what was changed and why.
-  - List every file modified and what was done in each.
-  - If there are any assumptions or risks, flag them for review.
-- **Reminder:** You are not a co-pilot, assistant, or brainstorm partner. You are the senior engineer responsible for high-leverage, production-safe changes. Do not improvise. Do not over-engineer. Do not deviate.
+## Overview
+This project implements a sophisticated job orchestration pattern for serverless Lambda functions that provides clean separation of concerns, reliable scheduling, and comprehensive monitoring.
+
+## Core Principles
+
+### 1. Single Responsibility Principle
+- **Workers** focus purely on business logic
+- **Orchestration** is handled by infrastructure layer
+- **Separation of concerns** prevents tight coupling
+
+### 2. Clean Architecture Layers
+```
+┌─────────────────┐
+│   API Triggers  │ ← Manual/API invocation
+├─────────────────┤
+│ Job Orchestrator│ ← Scheduled execution
+├─────────────────┤
+│  Worker Layer   │ ← Pure business logic
+├─────────────────┤
+│ Orchestrators   │ ← Business logic coordination
+├─────────────────┤
+│   Services      │ ← Data access & external APIs
+└─────────────────┘
+```
+
+### 3. Job Orchestration Pattern
+- **Database-driven scheduling** replaces serverless cron triggers
+- **Single item per job** with all configuration and status
+- **Automatic status tracking** and timeout handling
+- **Transparent orchestration** via wrapper functions
+
+## Key Components
+
+### Handler Wrapper Functions
+- `withApiTriggerLifecycle` - Fire-and-forget Lambda invocation
+- `withJobOrchestratedHandlerLifecycle` - Business logic + orchestration
+- `withScheduledHandlerLifecycle` - Basic scheduled execution
+
+### Job Orchestration Service
+- `initializeJob()` - Setup job configuration
+- `getJobsToRun()` - Query pending jobs
+- `updateJobStatus()` - Track execution state
+- `handleTimedOutJobs()` - Automatic timeout handling
+
+### Worker Pattern
+```javascript
+// Pure business logic - no orchestration concerns
+const businessLogic = async ({ logger, errorHandler, event, context }) => {
+  const result = await performBusinessLogic();
+  return result;
+};
+
+// Orchestration handled by wrapper
+module.exports.handler = withJobOrchestratedHandlerLifecycle(businessLogic, {
+  handlerName: "my-worker",
+  operation: "business_operation",
+  validateEnvironment: validateEnvironment,
+  jobName: "myJob" // Used for orchestration updates
+});
+```
+
+## Usage Patterns
+
+### 1. Manual API Trigger
+```
+User → API Endpoint → Worker (pure business logic)
+```
+
+### 2. Scheduled Orchestration
+```
+Job Orchestrator → Worker (business logic + status updates)
+```
+
+### 3. Job Initialization
+```javascript
+POST /api/initialize/job-orchestration
+// Creates database entries for all cron jobs
+```
+
+## Benefits
+
+- ✅ **Clean separation** between business logic and infrastructure
+- ✅ **Database-driven** scheduling instead of serverless cron
+- ✅ **Automatic monitoring** and timeout handling
+- ✅ **Testable business logic** without orchestration dependencies
+- ✅ **Consistent patterns** across all scheduled functions
+- ✅ **Reliable execution** with comprehensive error handling
+
+## Detailed Documentation
+
+For comprehensive documentation, see:
+- `.cursor/rules/job-orchestration-pattern.mdc` - Complete implementation guide
+- `.cursor/rules/worker-patterns.mdc` - Worker implementation patterns
+- `.cursor/rules/orchestration-service.mdc` - Job orchestration service API
+
+## Migration Notes
+
+### From: Serverless Cron Triggers
+```yaml
+functions:
+  myFunction:
+    events:
+      - schedule: cron(0 3 * * ? *)
+```
+
+### To: Database-Driven Orchestration
+```javascript
+// 1. Initialize job configuration
+POST /api/initialize/job-orchestration
+
+// 2. Job orchestrator runs every minute
+jobOrchestrator:
+  events:
+    - schedule: cron(* * * * ? *)
+```
+
+## Best Practices
+
+1. **Always use orchestrators** for complex business logic
+2. **Keep workers focused** on single responsibilities
+3. **Use wrapper functions** for consistent behavior
+4. **Initialize jobs** after deployment
+5. **Monitor orchestration logs** for system health
+6. **Test business logic separately** from orchestration
+
+## Quick Reference
+
+### Creating a New Worker
+1. Create business logic function
+2. Create orchestrator service (optional)
+3. Wrap with `withJobOrchestratedHandlerLifecycle`
+4. Add to job initialization
+5. Deploy and initialize
+
+### Debugging Orchestration
+- Check CloudWatch logs for orchestration events
+- Verify job status in DynamoDB
+- Test worker functions independently
+- Monitor timeout handling
+
+---
+*This architecture provides a robust, scalable, and maintainable foundation for complex serverless applications with scheduled execution requirements.*

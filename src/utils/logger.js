@@ -111,7 +111,7 @@ function createLogger(context = "system") {
 
       // Lambda-specific logging methods
       logLambdaStart(event, awsContext) {
-        this.info("Lambda function started", {
+        this.debug("Lambda function started", {
           requestId: awsContext.awsRequestId,
           functionName: awsContext.functionName,
           event: JSON.stringify(event),
@@ -119,7 +119,7 @@ function createLogger(context = "system") {
       },
 
       logLambdaEnd(duration, success = true) {
-        this.info(`Lambda function ${success ? "completed" : "failed"}`, {
+        this.debug(`Lambda function ${success ? "completed" : "failed"}`, {
           duration: `${duration}ms`,
           success,
         });

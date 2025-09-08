@@ -126,15 +126,58 @@ module.exports.handler = async (event, context) => {
       };
     }
 
+    // Test 5: Tradability Check (including BPTH test case)
+    try {
+      logger.info("Testing asset tradability");
+      const testTickers = ["BPTH", "AAPL", "SPY"];
+
+      testResults.tests.tradability = {
+        status: "success",
+        testedTickers: testTickers,
+        results: {},
+      };
+
+      for (const ticker of testTickers) {
+        try {
+          const isTradable = await brokerageService.isTradable(ticker);
+          const assetInfo = await brokerageService.getAssetInfo(ticker);
+
+          testResults.tests.tradability.results[ticker] = {
+            tradable: isTradable,
+            exchange: assetInfo.exchange,
+            status: assetInfo.status,
+            class: assetInfo.class,
+          };
+        } catch (error) {
+          testResults.tests.tradability.results[ticker] = {
+            tradable: false,
+            error: error.message,
+          };
+        }
+      }
+    } catch (error) {
+      testResults.tests.tradability = {
+        status: "failed",
+        error: error.message,
+        code: error.response?.status,
+      };
+    }
+
     // Determine overall status
     const failedTests = Object.values(testResults.tests).filter(
       (test) => test.status === "failed"
     ).length;
     const totalTests = Object.keys(testResults.tests).length;
 
-    if (failedTests === 0) {
+    // Special handling: tradability test is less critical than others
+    const criticalTests = ["account", "portfolio", "orders"];
+    const criticalFailed = criticalTests.filter(
+      (test) => testResults.tests[test]?.status === "failed"
+    ).length;
+
+    if (criticalFailed === 0) {
       testResults.overall = "healthy";
-    } else if (failedTests === totalTests) {
+    } else if (criticalFailed === criticalTests.length) {
       testResults.overall = "failed";
     } else {
       testResults.overall = "degraded";
@@ -154,6 +197,9 @@ module.exports.handler = async (event, context) => {
       portfolioTest: testResults.tests.portfolio.status,
       ordersTest: testResults.tests.orders.status,
       tradingTest: testResults.tests.trading?.status || "not_tested",
+      tradabilityTest: testResults.tests.tradability?.status || "not_tested",
+      bphtTradable:
+        testResults.tests.tradability?.results?.BPTH?.tradable || "unknown",
     });
 
     // Log function end

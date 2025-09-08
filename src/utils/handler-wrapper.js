@@ -1,9 +1,15 @@
 /**
  * Handler Wrapper HOC (Higher-Order Component)
- * Wraps API handlers with automatic log flushing functionality
+ * Wraps API handlers with automatic log flushing and logging setup
  */
 
 const Logger = require("./logger");
+const ErrorHandler = require("./error-handler");
+const {
+  createLambdaClient,
+  invokeLambdaFunction,
+} = require("../utils/lambda-client");
+const { updateJobStatus } = require("../services/job-orchestration-service");
 
 /**
  * Higher-order function that wraps Lambda handlers with automatic log flushing
@@ -46,10 +52,9 @@ function withLogFlushing(handler, options = {}) {
         try {
           await Logger.flush();
         } catch (flushError) {
-          console.warn(
-            `Failed to flush logs after ${handlerName} execution:`,
-            flushError
-          );
+          console.warn(`Failed to flush logs after ${handlerName} execution:`, {
+            error: flushError,
+          });
           // Don't modify the response if log flushing fails
         }
       }
@@ -61,10 +66,9 @@ function withLogFlushing(handler, options = {}) {
         try {
           await Logger.flush();
         } catch (flushError) {
-          console.warn(
-            `Failed to flush logs on ${handlerName} error:`,
-            flushError
-          );
+          console.warn(`Failed to flush logs on ${handlerName} error:`, {
+            error: flushError,
+          });
         }
       }
 
@@ -104,8 +108,366 @@ function withScheduledLogFlushing(handler, handlerName = "scheduled-handler") {
   });
 }
 
+/**
+ * Enhanced API handler wrapper with complete logging lifecycle
+ * @param {Function} businessLogic - Pure business logic function that receives ({ logger, errorHandler, event, context })
+ * @param {Object} options - Configuration options
+ * @param {string} options.handlerName - Name for logging and error handling
+ * @param {string} options.operation - Operation name for error alerts
+ * @param {Function} options.validateEnvironment - Optional environment validation function
+ * @returns {Function} - Wrapped handler function
+ */
+function withApiHandlerLifecycle(businessLogic, options = {}) {
+  const {
+    handlerName = "api-handler",
+    operation = "api_operation",
+    validateEnvironment,
+  } = options;
+
+  return async (event, context) => {
+    // Initialize services
+    const logger = new Logger(handlerName);
+    const errorHandler = new ErrorHandler(handlerName);
+
+    try {
+      // Log function start
+      logger.logLambdaStart(event, context);
+
+      // Validate environment if provided
+      if (validateEnvironment) {
+        validateEnvironment();
+      }
+
+      // Execute business logic
+      const result = await businessLogic({
+        logger,
+        errorHandler,
+        event,
+        context,
+      });
+
+      // Log function end
+      logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
+
+      return result;
+    } catch (error) {
+      logger.error(`Failed to execute ${handlerName}`, { error });
+
+      // Send error alert
+      try {
+        await errorHandler.sendErrorAlert(error, {
+          function: handlerName,
+          operation: operation,
+        });
+      } catch (alertError) {
+        logger.error("Failed to send error alert", { error: alertError });
+      }
+
+      // Log function end with error
+      logger.logLambdaEnd(
+        Date.now() - context.getRemainingTimeInMillis(),
+        false
+      );
+
+      // Return error response
+      return {
+        statusCode: 500,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+        body: JSON.stringify({
+          error: `Failed to execute ${handlerName}`,
+          message: error.message,
+        }),
+      };
+    }
+  };
+}
+
+/**
+ * Enhanced scheduled handler wrapper with complete logging lifecycle
+ * @param {Function} businessLogic - Pure business logic function that receives ({ logger, errorHandler, event, context })
+ * @param {Object} options - Configuration options
+ * @param {string} options.handlerName - Name for logging and error handling
+ * @param {string} options.operation - Operation name for error alerts
+ * @param {Function} options.validateEnvironment - Optional environment validation function
+ * @returns {Function} - Wrapped handler function
+ */
+function withScheduledHandlerLifecycle(businessLogic, options = {}) {
+  const {
+    handlerName = "scheduled-handler",
+    operation = "scheduled_operation",
+    validateEnvironment,
+  } = options;
+
+  return async (event, context) => {
+    // Initialize services
+    const logger = new Logger(handlerName);
+    const errorHandler = new ErrorHandler(handlerName);
+
+    try {
+      // Log function start
+      logger.logLambdaStart(event, context);
+
+      // Validate environment if provided
+      if (validateEnvironment) {
+        validateEnvironment();
+      }
+
+      // Execute business logic
+      const result = await businessLogic({
+        logger,
+        errorHandler,
+        event,
+        context,
+      });
+
+      // Log function end
+      logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
+
+      return result;
+    } catch (error) {
+      logger.error(`${handlerName} failed`, error);
+
+      // Send error alert
+      try {
+        await errorHandler.sendErrorAlert(error, {
+          function: handlerName,
+          operation: operation,
+        });
+      } catch (alertError) {
+        logger.error("Failed to send error alert", alertError);
+      }
+
+      // Log function end with error
+      logger.logLambdaEnd(
+        Date.now() - context.getRemainingTimeInMillis(),
+        false
+      );
+
+      throw error;
+    }
+  };
+}
+
+/**
+ * Enhanced scheduled handler lifecycle with job orchestration support
+ * Automatically handles job status updates when triggered by job orchestrator
+ * @param {Function} businessLogic - Pure business logic function
+ * @param {Object} options - Configuration options
+ * @param {string} options.handlerName - Name for logging and error handling
+ * @param {string} options.operation - Operation name for error alerts
+ * @param {Function} options.validateEnvironment - Optional environment validation function
+ * @param {string} options.jobName - Name of the job for orchestration updates
+ * @returns {Function} - Wrapped handler function with orchestration support
+ */
+function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
+  const {
+    handlerName = "job-orchestrated-handler",
+    operation = "job_orchestrated_operation",
+    validateEnvironment,
+    jobName,
+  } = options;
+
+  return async (event, context) => {
+    // Initialize services
+    const logger = new Logger(handlerName);
+    const errorHandler = new ErrorHandler(handlerName);
+
+    // Check if this is triggered by the job orchestrator
+    const isOrchestrationTrigger = event?.source === "orchestration-trigger";
+    const executionId = event?.executionId;
+
+    if (isOrchestrationTrigger && executionId) {
+      logger.info("Job triggered by orchestrator", {
+        executionId,
+        orchestrationExecutionId: event.orchestrationExecutionId,
+        jobName: event.jobConfig?.jobName,
+      });
+    }
+
+    try {
+      // Log function start
+      logger.logLambdaStart(event, context);
+
+      // Validate environment if provided
+      if (validateEnvironment) {
+        validateEnvironment();
+      }
+
+      // Execute business logic (pure, no orchestration concerns)
+      const result = await businessLogic({
+        logger,
+        errorHandler,
+        event,
+        context,
+      });
+
+      // Update job status if this was triggered by orchestrator
+      if (isOrchestrationTrigger && executionId && jobName) {
+        try {
+          await updateJobStatus(jobName, "completed", executionId);
+          logger.info("Job status updated to completed", {
+            executionId,
+            jobName,
+          });
+        } catch (statusError) {
+          logger.error("Failed to update job status", {
+            executionId,
+            jobName,
+            statusError,
+          });
+        }
+      }
+
+      // Log function end
+      logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
+
+      return result;
+    } catch (error) {
+      logger.error(`${handlerName} failed`, error);
+
+      // Update job status if this was triggered by orchestrator
+      if (isOrchestrationTrigger && executionId && jobName) {
+        try {
+          await updateJobStatus(jobName, "failed", executionId, error);
+          logger.info("Job status updated to failed", { executionId, jobName });
+        } catch (statusError) {
+          logger.error("Failed to update job status", {
+            executionId,
+            jobName,
+            statusError,
+          });
+        }
+      }
+
+      // Send error alert
+      try {
+        await errorHandler.sendErrorAlert(error, {
+          function: handlerName,
+          operation: operation,
+        });
+      } catch (alertError) {
+        logger.error("Failed to send error alert", alertError);
+      }
+
+      // Log function end with error
+      logger.logLambdaEnd(
+        Date.now() - context.getRemainingTimeInMillis(),
+        false
+      );
+
+      throw error;
+    }
+  };
+}
+
+/**
+ * Enhanced API trigger wrapper for fire-and-forget Lambda invocation
+ * @param {Object} options - Configuration options
+ * @param {string} options.triggerHandlerName - Name of this trigger handler
+ * @param {string} options.targetFunctionName - Name of the scheduled Lambda function to invoke
+ * @param {string} options.operation - Operation name for error alerts
+ * @param {Function} options.validateEnvironment - Optional environment validation function
+ * @returns {Function} - Wrapped trigger handler function
+ */
+function withApiTriggerLifecycle(options = {}) {
+  const {
+    triggerHandlerName = "api-trigger",
+    targetFunctionName,
+    operation = "lambda_trigger",
+    validateEnvironment,
+  } = options;
+
+  return async (event, context) => {
+    // Initialize services
+    const logger = new Logger(triggerHandlerName);
+    const errorHandler = new ErrorHandler(triggerHandlerName);
+    let lambda;
+
+    try {
+      // Log function start
+      logger.logLambdaStart(event, context);
+
+      // Validate environment if provided
+      if (validateEnvironment) {
+        validateEnvironment();
+      }
+
+      // Initialize Lambda client
+      lambda = createLambdaClient();
+
+      logger.debug(`Triggering ${targetFunctionName} Lambda function`);
+
+      // Invoke the target Lambda function (fire-and-forget)
+      const result = await invokeLambdaFunction(targetFunctionName, {}, lambda);
+
+      logger.debug(`${targetFunctionName} triggered successfully`, {
+        targetFunction: targetFunctionName,
+        requestId: result.$response.requestId,
+        statusCode: result.StatusCode,
+      });
+
+      // Log function end
+      logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
+
+      return {
+        statusCode: 202, // Accepted - asynchronous operation
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+        body: JSON.stringify({
+          success: true,
+          message: `${targetFunctionName} triggered successfully`,
+          targetFunction: targetFunctionName,
+          requestId: result.$response.requestId,
+          timestamp: new Date().toISOString(),
+        }),
+      };
+    } catch (error) {
+      logger.error(`Failed to trigger ${targetFunctionName}`, error);
+
+      // Send error alert
+      try {
+        await errorHandler.sendErrorAlert(error, {
+          function: triggerHandlerName,
+          operation: operation,
+          targetFunction: targetFunctionName,
+        });
+      } catch (alertError) {
+        logger.error("Failed to send error alert", alertError);
+      }
+
+      // Log function end with error
+      logger.logLambdaEnd(
+        Date.now() - context.getRemainingTimeInMillis(),
+        false
+      );
+
+      // Return error response
+      return {
+        statusCode: 500,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+        body: JSON.stringify({
+          error: `Failed to trigger ${targetFunctionName}`,
+          message: error.message,
+        }),
+      };
+    }
+  };
+}
+
 module.exports = {
   withLogFlushing,
   withApiLogFlushing,
   withScheduledLogFlushing,
+  withApiHandlerLifecycle,
+  withScheduledHandlerLifecycle,
+  withJobOrchestratedHandlerLifecycle,
+  withApiTriggerLifecycle,
 };

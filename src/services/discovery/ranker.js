@@ -47,33 +47,60 @@ class RankerService {
         universeDate: universe.date,
       });
 
-      // Compute scores for each ticker
+      // Compute scores for each ticker with concurrent processing
       const tickerScores = [];
+      const batchSize = RANKING_CONFIG.CONCURRENCY?.BATCH_SIZE || 10; // Configurable batch size
 
-      // universe.tickers = [{ symbol: "KMDA" }];
+      // Process tickers in batches to avoid overwhelming DynamoDB
+      for (let i = 0; i < universe.tickers.length; i += batchSize) {
+        const batch = universe.tickers.slice(i, i + batchSize);
+        this.logger.debug(
+          `Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(
+            universe.tickers.length / batchSize
+          )} (${batch.length} tickers)`
+        );
 
-      for (const tickerObj of universe.tickers) {
-        const tickerSymbol = tickerObj.symbol; // Extract the symbol from the ticker object
-        try {
-          const score = await this.computeCompositeScore(tickerSymbol);
-          tickerScores.push({
-            ticker: tickerSymbol,
-            ...score,
-          });
-        } catch (error) {
-          this.logger.warn(`Failed to score ${tickerSymbol}: ${error.message}`);
-          // Include with neutral score
-          tickerScores.push({
-            ticker: tickerSymbol,
-            compositeScore: 50, // Neutral baseline
-            fundamentalsScore: 0,
-            newsScore: 0,
-            momentumScore: 0,
-            riskPenalty: 0,
-            reasonCodes: ["SCORING_ERROR"],
-            evidenceCount: 0,
-            lastEvidenceDate: null,
-          });
+        // Process batch concurrently
+        const batchPromises = batch.map(async (tickerObj) => {
+          const tickerSymbol = tickerObj.symbol;
+          try {
+            const score = await this.computeCompositeScore(tickerSymbol);
+            return {
+              ticker: tickerSymbol,
+              ...score,
+            };
+          } catch (error) {
+            this.logger.warn(
+              `Failed to score ${tickerSymbol}: ${error.message}`
+            );
+            return {
+              ticker: tickerSymbol,
+              compositeScore: 50, // Neutral baseline
+              fundamentalsScore: 0,
+              newsScore: 0,
+              momentumScore: 0,
+              riskPenalty: 0,
+              reasonCodes: ["SCORING_ERROR"],
+              evidenceCount: 0,
+              lastEvidenceDate: null,
+            };
+          }
+        });
+
+        // Wait for all promises in this batch to settle
+        const batchResults = await Promise.allSettled(batchPromises);
+
+        // Collect results (Promise.allSettled always resolves)
+        for (const result of batchResults) {
+          if (result.status === "fulfilled") {
+            tickerScores.push(result.value);
+          } else {
+            // This shouldn't happen with our error handling, but just in case
+            this.logger.error(
+              "Unexpected promise rejection in batch processing",
+              result.reason
+            );
+          }
         }
       }
 

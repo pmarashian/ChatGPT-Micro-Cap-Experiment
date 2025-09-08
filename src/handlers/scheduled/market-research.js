@@ -59,6 +59,14 @@ const baseHandler = async (event, context) => {
     // Step 3: Generate deep research analysis
     logger.info("🧠 Step 3: Performing deep AI research analysis");
 
+    // TODO: Enhance market-research to actively follow up on RESEARCH actions
+    // Currently RESEARCH actions from trading decisions are tracked in AI memory
+    // but not specifically targeted for follow-up analysis. Future enhancement:
+    // - Query AI memory for recent RESEARCH decisions
+    // - Include those tickers in focused research prompts
+    // - Generate deeper analysis for tickers flagged as needing research
+    // - Update decision status from RESEARCH to BUY/HOLD/SELL after analysis
+
     // Create focused research prompt (without trading decisions)
     const researchPrompt = aiService.buildResearchPrompt(
       currentPortfolio,

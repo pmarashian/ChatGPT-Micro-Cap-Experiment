@@ -3,7 +3,7 @@
  * Handles trade execution and portfolio synchronization
  */
 
-const axios = require("axios");
+const AlpacaService = require("./alpaca-service");
 const Logger = require("../utils/logger");
 const ErrorHandler = require("../utils/error-handler");
 const { getEnvConfig } = require("../config/environment");
@@ -14,20 +14,8 @@ class BrokerageService {
     this.errorHandler = new ErrorHandler("brokerage-service");
     this.envConfig = getEnvConfig();
 
-    this.baseUrl = this.envConfig.alpacaBaseUrl;
-    this.apiKey = this.envConfig.alpacaKeyId;
-    this.secretKey = this.envConfig.alpacaSecretKey;
-
-    // Create axios instance with authentication
-    this.client = axios.create({
-      baseURL: this.baseUrl,
-      headers: {
-        "APCA-API-KEY-ID": this.apiKey,
-        "APCA-API-SECRET-KEY": this.secretKey,
-        "Content-Type": "application/json",
-      },
-      timeout: 30000, // 30 second timeout
-    });
+    // Initialize Alpaca service with rate limiting
+    this.alpacaService = new AlpacaService();
   }
 
   /**
@@ -49,18 +37,18 @@ class BrokerageService {
       const orderData = this.buildOrderData(tradeOrder);
       this.logger.debug("Order data being sent to Alpaca", { orderData });
 
-      const response = await this.client.post("/orders", orderData);
+      const response = await this.alpacaService.submitOrder(orderData);
 
       const result = {
-        orderId: response.data.id,
-        status: response.data.status,
+        orderId: response.id,
+        status: response.status,
         ticker: tradeOrder.ticker,
         action: tradeOrder.action,
         shares: tradeOrder.shares,
         orderType: tradeOrder.orderType,
-        submittedAt: response.data.submitted_at,
-        filledAt: response.data.filled_at,
-        filledPrice: response.data.filled_avg_price,
+        submittedAt: response.submitted_at,
+        filledAt: response.filled_at,
+        filledPrice: response.filled_avg_price,
         success: true,
       };
 
@@ -68,8 +56,7 @@ class BrokerageService {
       return result;
     } catch (error) {
       this.logger.error(
-        `Trade execution failed for ${tradeOrder.ticker}`,
-        error
+        `Trade execution failed for ${tradeOrder.ticker}: ${error.message}`
       );
 
       const errorResult = {
@@ -77,7 +64,7 @@ class BrokerageService {
         action: tradeOrder.action,
         shares: tradeOrder.shares,
         success: false,
-        error: error.response?.data?.message || error.message,
+        error: error.message,
       };
 
       this.logger.logTradeExecution(null, errorResult, false);
@@ -93,9 +80,9 @@ class BrokerageService {
     try {
       this.logger.debug("Fetching current portfolio positions");
 
-      const response = await this.client.get("/positions");
+      const positions = await this.alpacaService.getPositions();
 
-      const positions = response.data.map((position) => ({
+      const formattedPositions = positions.map((position) => ({
         ticker: position.symbol,
         shares: parseInt(position.qty),
         marketValue: parseFloat(position.market_value),
@@ -105,11 +92,13 @@ class BrokerageService {
       }));
 
       this.logger.info(
-        `Retrieved ${positions.length} positions from brokerage`
+        `Retrieved ${formattedPositions.length} positions from brokerage`
       );
-      return positions;
+      return formattedPositions;
     } catch (error) {
-      this.logger.error("Failed to fetch portfolio positions", error);
+      this.logger.error(
+        `Failed to fetch portfolio positions: ${error.message}`
+      );
       throw new Error(`Portfolio fetch error: ${error.message}`);
     }
   }
@@ -122,17 +111,17 @@ class BrokerageService {
     try {
       this.logger.debug("Fetching account information");
 
-      const response = await this.client.get("/account");
+      const accountData = await this.alpacaService.getAccount();
 
       const accountInfo = {
-        accountId: response.data.id,
-        cash: parseFloat(response.data.cash),
-        portfolioValue: parseFloat(response.data.portfolio_value),
-        equity: parseFloat(response.data.equity),
-        buyingPower: parseFloat(response.data.buying_power),
-        dayTradeCount: parseInt(response.data.daytrade_count),
-        status: response.data.status,
-        currency: response.data.currency,
+        accountId: accountData.id,
+        cash: parseFloat(accountData.cash),
+        portfolioValue: parseFloat(accountData.portfolio_value),
+        equity: parseFloat(accountData.equity),
+        buyingPower: parseFloat(accountData.buying_power),
+        dayTradeCount: parseInt(accountData.daytrade_count),
+        status: accountData.status,
+        currency: accountData.currency,
       };
 
       this.logger.debug("Account information retrieved", {
@@ -143,7 +132,9 @@ class BrokerageService {
 
       return accountInfo;
     } catch (error) {
-      this.logger.error("Failed to fetch account information", error);
+      this.logger.error(
+        `Failed to fetch account information: ${error.message}`
+      );
       throw new Error(`Account info fetch error: ${error.message}`);
     }
   }
@@ -155,21 +146,23 @@ class BrokerageService {
    */
   async getOrderStatus(orderId) {
     try {
-      const response = await this.client.get(`/orders/${orderId}`);
+      const orderData = await this.alpacaService.getOrder(orderId);
 
       return {
-        orderId: response.data.id,
-        status: response.data.status,
-        ticker: response.data.symbol,
-        action: response.data.side,
-        shares: parseInt(response.data.qty),
-        filledShares: parseInt(response.data.filled_qty),
-        filledPrice: response.data.filled_avg_price,
-        submittedAt: response.data.submitted_at,
-        filledAt: response.data.filled_at,
+        orderId: orderData.id,
+        status: orderData.status,
+        ticker: orderData.symbol,
+        action: orderData.side,
+        shares: parseInt(orderData.qty),
+        filledShares: parseInt(orderData.filled_qty),
+        filledPrice: orderData.filled_avg_price,
+        submittedAt: orderData.submitted_at,
+        filledAt: orderData.filled_at,
       };
     } catch (error) {
-      this.logger.error(`Failed to get order status for ${orderId}`, error);
+      this.logger.error(
+        `Failed to get order status for ${orderId}: ${error.message}`
+      );
       throw new Error(`Order status error: ${error.message}`);
     }
   }
@@ -182,7 +175,7 @@ class BrokerageService {
   async cancelOrder(orderId) {
     try {
       this.logger.info(`Cancelling order ${orderId}`);
-      await this.client.delete(`/orders/${orderId}`);
+      await this.alpacaService.cancelOrder(orderId);
 
       return {
         orderId,
@@ -190,7 +183,7 @@ class BrokerageService {
         cancelledAt: new Date().toISOString(),
       };
     } catch (error) {
-      this.logger.error(`Failed to cancel order ${orderId}`, error);
+      this.logger.error(`Failed to cancel order ${orderId}: ${error.message}`);
       throw new Error(`Order cancellation error: ${error.message}`);
     }
   }
@@ -207,10 +200,10 @@ class BrokerageService {
       const orderId = orderResult.orderId;
 
       // Check current order status
-      const orderStatus = await this.client.get(`/orders/${orderId}`);
+      const orderStatus = await this.alpacaService.getOrder(orderId);
 
-      if (orderStatus.data.status === "filled") {
-        const executionPrice = parseFloat(orderStatus.data.filled_avg_price);
+      if (orderStatus.status === "filled") {
+        const executionPrice = parseFloat(orderStatus.filled_avg_price);
         const priceChange =
           Math.abs(executionPrice - referencePrice) / referencePrice;
 
@@ -240,11 +233,12 @@ class BrokerageService {
         };
       }
 
-      return { monitored: true, status: orderStatus.data.status };
+      return { monitored: true, status: orderStatus.status };
     } catch (error) {
       this.logger.error(
-        `Failed to monitor order ${orderResult.orderId || "unknown"}`,
-        error
+        `Failed to monitor order ${orderResult.orderId || "unknown"}: ${
+          error.message
+        }`
       );
       return { monitored: false, error: error.message };
     }
@@ -257,16 +251,14 @@ class BrokerageService {
   async getOpenOrders() {
     try {
       this.logger.debug("Fetching open orders");
-      const response = await this.client.get("/orders", {
-        params: {
-          status: "open",
-        },
+      const orders = await this.alpacaService.getOrders({
+        status: "open",
       });
 
-      this.logger.debug(`Retrieved ${response.data.length} open orders`);
-      return response.data;
+      this.logger.debug(`Retrieved ${orders.length} open orders`);
+      return orders;
     } catch (error) {
-      this.logger.error("Failed to fetch open orders", error);
+      this.logger.error(`Failed to fetch open orders: ${error.message}`);
       throw new Error(`Open orders fetch error: ${error.message}`);
     }
   }
@@ -328,15 +320,65 @@ class BrokerageService {
   }
 
   /**
+   * Get asset information including tradability status
+   * @param {string} symbol - Stock ticker symbol
+   * @returns {Promise<Object>} Asset information
+   */
+  async getAssetInfo(symbol) {
+    try {
+      // this.logger.debug(`Fetching asset info for ${symbol}`);
+      const assetData = await this.alpacaService.getAsset(symbol);
+
+      return {
+        symbol: assetData.symbol,
+        name: assetData.name,
+        exchange: assetData.exchange,
+        class: assetData.class,
+        status: assetData.status,
+        tradable: assetData.tradable,
+        marginable: assetData.marginable,
+        shortable: assetData.shortable,
+        easyToBorrow: assetData.easy_to_borrow,
+        minOrderSize: assetData.min_order_size,
+        maxOrderSize: assetData.max_order_size,
+        priceIncrement: assetData.price_increment,
+        sizeIncrement: assetData.size_increment,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to get asset info for ${symbol}: ${error.message}`
+      );
+      throw new Error(`Asset info fetch error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check if an asset is tradable
+   * @param {string} symbol - Stock ticker symbol
+   * @returns {Promise<boolean>} Whether the asset is tradable
+   */
+  async isTradable(symbol) {
+    try {
+      const assetInfo = await this.getAssetInfo(symbol);
+      return assetInfo.tradable === true;
+    } catch (error) {
+      this.logger.warn(
+        `Could not verify tradability for ${symbol}, assuming not tradable: ${error.message}`
+      );
+      return false; // Default to false for safety
+    }
+  }
+
+  /**
    * Check if market is open
    * @returns {Promise<boolean>} Market open status
    */
   async isMarketOpen() {
     try {
-      const response = await this.client.get("/clock");
-      return response.data.is_open;
+      const clockData = await this.alpacaService.getClock();
+      return clockData.is_open;
     } catch (error) {
-      this.logger.error("Failed to check market status", error);
+      this.logger.error(`Failed to check market status: ${error.message}`);
       // Default to false on error
       return false;
     }
@@ -349,14 +391,12 @@ class BrokerageService {
    */
   async getRecentOrders(limit = 50) {
     try {
-      const response = await this.client.get("/orders", {
-        params: {
-          limit,
-          status: "all",
-        },
+      const orders = await this.alpacaService.getOrders({
+        limit,
+        status: "all",
       });
 
-      return response.data.map((order) => ({
+      return orders.map((order) => ({
         orderId: order.id,
         ticker: order.symbol,
         action: order.side,
@@ -368,7 +408,7 @@ class BrokerageService {
         filledPrice: order.filled_avg_price,
       }));
     } catch (error) {
-      this.logger.error("Failed to fetch recent orders", error);
+      this.logger.error(`Failed to fetch recent orders: ${error.message}`);
       throw new Error(`Recent orders fetch error: ${error.message}`);
     }
   }

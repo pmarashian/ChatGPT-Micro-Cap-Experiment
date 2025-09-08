@@ -155,9 +155,9 @@ class IngestionService {
             await this.ingestTickerFundamentals(ticker);
             return { ticker, status: "success" };
           } catch (error) {
-            this.logger.warn(
-              `Failed to ingest fundamentals for ${ticker}: ${error.message}`
-            );
+            // this.logger.warn(
+            //   `Failed to ingest fundamentals for ${ticker}: ${error.message}`
+            // );
             return { ticker, status: "error", error: error.message };
           }
         });
@@ -277,7 +277,7 @@ class IngestionService {
       // Process and persist fundamentals
       await this.persistFundamentals(ticker, fundamentalsData);
 
-      this.logger.debug(`Successfully ingested fundamentals for ${ticker}`);
+      // this.logger.debug(`Successfully ingested fundamentals for ${ticker}`);
       return { processed: true };
     } catch (error) {
       throw new Error(
@@ -296,7 +296,7 @@ class IngestionService {
       const newsData = await this.fetchNewsFromFMP(ticker);
 
       if (!newsData || newsData.length === 0) {
-        this.logger.debug(`No recent news for ${ticker}`);
+        // this.logger.debug(`No recent news for ${ticker}`);
         return { processed: true, newsCount: 0 };
       }
 
@@ -312,9 +312,9 @@ class IngestionService {
         await this.persistNews(ticker, newsItem);
       }
 
-      this.logger.debug(
-        `Successfully ingested ${newsToProcess.length} news items for ${ticker}`
-      );
+      // this.logger.debug(
+      //   `Successfully ingested ${newsToProcess.length} news items for ${ticker}`
+      // );
       return { processed: true, newsCount: newsToProcess.length };
     } catch (error) {
       throw new Error(`News ingestion failed for ${ticker}: ${error.message}`);
@@ -445,10 +445,10 @@ class IngestionService {
 
       await this.dynamodb.put(params).promise();
 
-      this.logger.debug(`Persisted fundamentals for ${ticker}`, {
-        asOfDate: item.asOfDate,
-        timestamp: timestamp,
-      });
+      // this.logger.debug(`Persisted fundamentals for ${ticker}`, {
+      //   asOfDate: item.asOfDate,
+      //   timestamp: timestamp,
+      // });
     } catch (error) {
       this.logger.error(`Failed to persist fundamentals for ${ticker}`, error);
       throw error;
@@ -509,10 +509,10 @@ class IngestionService {
 
       await this.dynamodb.put(params).promise();
 
-      this.logger.debug(`Persisted news for ${ticker}`, {
-        headline: item.headline.substring(0, 50) + "...",
-        publishedAt: publishedAt,
-      });
+      // this.logger.debug(`Persisted news for ${ticker}`, {
+      //   headline: item.headline.substring(0, 50) + "...",
+      //   publishedAt: publishedAt,
+      // });
     } catch (error) {
       this.logger.error(`Failed to persist news for ${ticker}`, error);
       throw error;
@@ -690,7 +690,7 @@ class IngestionService {
 
       return latestUniverse.tickers.map((t) => t.symbol);
     } catch (error) {
-      this.logger.error("Failed to get universe tickers", error);
+      this.logger.error("Failed to get universe tickers", { error });
       return [];
     }
   }

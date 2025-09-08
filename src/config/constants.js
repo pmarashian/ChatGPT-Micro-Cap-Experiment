@@ -117,7 +117,7 @@ const DISCOVERY_CONFIG = {
   MAX_MARKET_CAP: 500000000, // $500M
   MIN_ADV_USD: 200000, // $200k notional ADV
   MAX_TICKERS_PER_RUN: 150,
-  BATCH_SIZE: 25,
+  BATCH_SIZE: 50,
   MAX_CONCURRENCY: 4,
 
   // Evidence and ingestion
@@ -276,6 +276,11 @@ const RANKING_CONFIG = {
       "recall",
       "going concern",
     ],
+  },
+
+  // Concurrency configuration for performance optimization
+  CONCURRENCY: {
+    BATCH_SIZE: 10, // Process 10 tickers concurrently to avoid overwhelming DynamoDB
   },
 };
 

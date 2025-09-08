@@ -1,0 +1,567 @@
+# Job Orchestration Pattern - Complete Implementation Guide
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+3. [Core Components](#core-components)
+4. [Implementation Patterns](#implementation-patterns)
+5. [Migration Guide](#migration-guide)
+6. [Best Practices](#best-practices)
+7. [Troubleshooting](#troubleshooting)
+8. [API Reference](#api-reference)
+
+## Overview
+
+The Job Orchestration Pattern provides a robust, scalable solution for managing scheduled Lambda functions in serverless applications. It replaces traditional serverless cron triggers with database-driven scheduling, offering better reliability, monitoring, and separation of concerns.
+
+### Key Benefits
+
+- ✅ **Database-driven scheduling** instead of serverless cron
+- ✅ **Clean separation** between business logic and infrastructure
+- ✅ **Automatic status tracking** and timeout handling
+- ✅ **Transparent orchestration** via wrapper functions
+- ✅ **Comprehensive monitoring** and error handling
+
+### Problem Solved
+
+Traditional serverless cron triggers have limitations:
+
+- Difficult to manage multiple schedules
+- No execution tracking or status monitoring
+- Limited error handling and retry capabilities
+- Tight coupling between scheduling and business logic
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    API Layer                                │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Trigger APIs (Manual Execution)                       │ │
+│  │  - /api/trigger/universe-build                         │ │
+│  │  - /api/trigger/discovery-ingestion                    │ │
+│  └─────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│                    Orchestration Layer                      │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Job Orchestrator (Scheduled)                          │ │
+│  │  - Runs every minute                                   │ │
+│  │  - Queries pending jobs                                │ │
+│  │  - Handles timeouts                                    │ │
+│  └─────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│                    Worker Layer                             │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Pure Business Logic Workers                           │ │
+│  │  - universe-build-worker                               │ │
+│  │  - discovery-ingestion-worker                          │ │
+│  │  - universe-ranking-worker                             │ │
+│  └─────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│                    Service Layer                            │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Business Logic Orchestrators                          │ │
+│  │  - universe-build-orchestrator                         │ │
+│  │  - discovery-ingestion-orchestrator                    │ │
+│  │  - universe-ranking-orchestrator                       │ │
+│  └─────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│                    Data Layer                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  DynamoDB Job Table                                     │ │
+│  │  - JOB#{jobName} items with SK="JOB"                    │ │
+│  │  - GSI1PK="JOB#enabled" for querying                    │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Core Components
+
+### 1. Handler Wrapper Functions
+
+#### `withApiTriggerLifecycle(options)`
+
+Fire-and-forget Lambda invocation for manual triggers.
+
+```javascript
+module.exports.handler = withApiTriggerLifecycle({
+  triggerHandlerName: "trigger-universe-build",
+  targetFunctionName: `${process.env.SERVICE_NAME}-${process.env.STAGE}-universeBuildWorker`,
+  operation: "manual_api_trigger",
+  validateEnvironment: validateEnvironment,
+});
+```
+
+#### `withJobOrchestratedHandlerLifecycle(businessLogic, options)`
+
+Business logic execution with automatic orchestration support.
+
+```javascript
+const businessLogic = async ({ logger, errorHandler, event, context }) => {
+  // Pure business logic only
+  const result = await performBusinessLogic();
+  return result;
+};
+
+module.exports.handler = withJobOrchestratedHandlerLifecycle(businessLogic, {
+  handlerName: "universe-build-worker",
+  operation: "universe_build_processing",
+  validateEnvironment: validateEnvironment,
+  jobName: "universeBuild", // For orchestration updates
+});
+```
+
+#### `withScheduledHandlerLifecycle(businessLogic, options)`
+
+Basic scheduled execution without orchestration.
+
+### 2. Job Orchestration Service
+
+#### Job Item Structure
+
+```javascript
+{
+  PK: `JOB#${jobName}`,
+  SK: "JOB",
+  GSI1PK: "JOB#enabled", // For querying enabled jobs
+  GSI1SK: jobName,
+
+  // Configuration
+  jobName: "universeBuild",
+  schedule: "0 3 * * ?", // Cron expression
+  timezone: "America/New_York",
+  targetFunction: "service-stage-universeBuildWorker",
+  maxRuntime: 300, // seconds
+  enabled: true,
+
+  // Status (updated by orchestration)
+  status: "pending", // pending, running, completed, failed, timed_out
+  nextRun: "2024-01-01T03:00:00.000Z",
+  lastUpdated: "2024-01-01T02:00:00.000Z",
+  executionId: null, // Set when running
+  startedAt: null, // Set when status = running
+  completedAt: null, // Set when status = completed
+  failedAt: null, // Set when status = failed
+  lastError: null, // Error message if failed
+}
+```
+
+#### Service Methods
+
+##### `initializeJob(jobConfig)`
+
+Creates a new job configuration in DynamoDB.
+
+```javascript
+await initializeJob({
+  jobName: "universeBuild",
+  schedule: "0 3 * * ?",
+  timezone: "America/New_York",
+  targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-universeBuildWorker`,
+  maxRuntime: 300,
+  description: "Builds the trading universe",
+  enabled: true,
+});
+```
+
+##### `getJobsToRun(logger)`
+
+Queries for jobs that should run based on schedule and status.
+
+```javascript
+const jobsToRun = await getJobsToRun(logger);
+// Returns array of job configurations ready for execution
+```
+
+##### `updateJobStatus(jobName, status, executionId, error)`
+
+Updates job status and handles next run scheduling.
+
+```javascript
+// Mark job as running
+await updateJobStatus("universeBuild", "running", executionId);
+
+// Mark job as completed
+await updateJobStatus("universeBuild", "completed", executionId);
+
+// Mark job as failed
+await updateJobStatus("universeBuild", "failed", executionId, error);
+```
+
+##### `handleTimedOutJobs(logger)`
+
+Checks for jobs that have exceeded maxRuntime and marks them as timed out.
+
+### 3. Initialization API
+
+#### POST `/api/initialize/job-orchestration`
+
+Initializes all cron jobs in the database.
+
+```javascript
+// Request body: none required
+// Initializes all jobs defined in the handler
+
+const jobConfigs = [
+  {
+    jobName: "universeBuild",
+    schedule: "0 3 * * ?",
+    timezone: "America/New_York",
+    targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-universeBuildWorker`,
+    maxRuntime: 300,
+    description: "Builds the trading universe",
+    enabled: true,
+  },
+  // ... more jobs
+];
+```
+
+## Implementation Patterns
+
+### Pattern 1: Worker with Orchestrator Service
+
+```javascript
+// 1. Create orchestrator service
+// src/services/discovery/universe-build-orchestrator.js
+async function performUniverseBuild(options = {}) {
+  const { invocationType = "manual", logger, errorHandler } = options;
+
+  try {
+    // Business logic implementation
+    const result = await performComplexBusinessLogic();
+    return result;
+  } catch (error) {
+    logInstance.error("Business logic failed", error);
+    throw error;
+  }
+}
+
+// 2. Create worker handler
+// src/handlers/workers/universe-build-worker.js
+const businessLogic = async ({ logger, errorHandler, event, context }) => {
+  const result = await performUniverseBuild({
+    invocationType: "scheduled",
+    logger,
+    errorHandler,
+  });
+  return result;
+};
+
+module.exports.handler = withJobOrchestratedHandlerLifecycle(businessLogic, {
+  handlerName: "universe-build-worker",
+  operation: "universe_build_processing",
+  validateEnvironment: validateEnvironment,
+  jobName: "universeBuild",
+});
+```
+
+### Pattern 2: Simple Worker (Inline Business Logic)
+
+```javascript
+const businessLogic = async ({ logger, errorHandler, event, context }) => {
+  // Simple business logic directly in worker
+  logger.info("Starting simple operation");
+
+  const result = await performSimpleOperation();
+  logger.info("Operation completed", { result });
+
+  return result;
+};
+
+module.exports.handler = withJobOrchestratedHandlerLifecycle(businessLogic, {
+  handlerName: "simple-worker",
+  operation: "simple_processing",
+  validateEnvironment: validateEnvironment,
+  jobName: "simpleJob",
+});
+```
+
+### Pattern 3: API Trigger Wrapper
+
+```javascript
+// API trigger that invokes worker
+module.exports.handler = withApiTriggerLifecycle({
+  triggerHandlerName: "trigger-universe-build",
+  targetFunctionName: `${process.env.SERVICE_NAME}-${process.env.STAGE}-universeBuildWorker`,
+  operation: "manual_api_trigger",
+  validateEnvironment: validateEnvironment,
+});
+```
+
+## Migration Guide
+
+### Step 1: Convert Serverless Cron to Database Job
+
+#### Before (Serverless Cron)
+
+```yaml
+# serverless.yml
+functions:
+  universeBuild:
+    handler: src/handlers/scheduled/universe-build.handler
+    timeout: 300
+    events:
+      - schedule: cron(0 3 * * ? *)
+```
+
+#### After (Database Job)
+
+```javascript
+// src/handlers/api/initialize-job-orchestration.js
+{
+  jobName: "universeBuild",
+  schedule: "0 3 * * ?",
+  timezone: "America/New_York",
+  targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-universeBuildWorker`,
+  maxRuntime: 300,
+  description: "Builds the trading universe",
+  enabled: true,
+}
+```
+
+### Step 2: Convert Scheduled Handler to Worker
+
+#### Before (Mixed Concerns)
+
+```javascript
+// Old scheduled handler
+const baseHandler = async (event, context) => {
+  // Business logic
+  const result = await performBusinessLogic();
+
+  // Manual orchestration (BAD!)
+  if (isOrchestrationTrigger) {
+    await updateJobStatus(jobName, "completed", executionId);
+  }
+
+  return result;
+};
+```
+
+#### After (Clean Separation)
+
+```javascript
+// New worker with orchestration wrapper
+const businessLogic = async ({ logger, errorHandler, event, context }) => {
+  // Pure business logic only
+  const result = await performBusinessLogic();
+  return result;
+};
+
+module.exports.handler = withJobOrchestratedHandlerLifecycle(businessLogic, {
+  jobName: "universeBuild", // Orchestration handled by wrapper
+});
+```
+
+### Step 3: Update Serverless Configuration
+
+#### Before
+
+```yaml
+functions:
+  universeBuild:
+    handler: src/handlers/scheduled/universe-build.handler
+    timeout: 300
+    events:
+      - schedule: cron(0 3 * * ? *)
+```
+
+#### After
+
+```yaml
+functions:
+  universeBuildWorker:
+    handler: src/handlers/workers/universe-build-worker.handler
+    timeout: 300
+    # No cron events - handled by job orchestrator
+
+  jobOrchestrator:
+    handler: src/handlers/scheduled/job-orchestrator.handler
+    timeout: 300
+    events:
+      - schedule: cron(* * * * ? *) # Every minute
+```
+
+### Step 4: Deploy and Initialize
+
+```bash
+# 1. Deploy updated functions
+serverless deploy
+
+# 2. Initialize job configurations
+curl -X POST https://your-api.com/api/initialize/job-orchestration
+
+# 3. Verify orchestration is working
+# Check CloudWatch logs for job orchestrator
+```
+
+## Best Practices
+
+### 1. Worker Design
+
+- ✅ **Single Responsibility**: Workers do one thing well
+- ✅ **Pure Functions**: No side effects or external dependencies in business logic
+- ✅ **Comprehensive Logging**: Log all important operations
+- ✅ **Error Handling**: Let orchestration wrapper handle job status updates
+
+### 2. Orchestration Configuration
+
+- ✅ **Descriptive Names**: Use clear, descriptive job names
+- ✅ **Realistic Timeouts**: Set appropriate maxRuntime values
+- ✅ **Proper Timezones**: Use correct timezone for schedule interpretation
+- ✅ **Detailed Descriptions**: Document what each job does
+
+### 3. Monitoring and Debugging
+
+- ✅ **Monitor Logs**: Watch orchestration logs for issues
+- ✅ **Check Status**: Query job status in DynamoDB
+- ✅ **Test Independently**: Test workers without orchestration
+- ✅ **Handle Timeouts**: Monitor for jobs exceeding maxRuntime
+
+### 4. Error Handling
+
+- ✅ **Graceful Degradation**: Workers should handle errors appropriately
+- ✅ **Informative Messages**: Log detailed error information
+- ✅ **Recovery Strategies**: Design for retry scenarios
+- ✅ **Alert Integration**: Use error handlers for critical failures
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. Jobs Not Running
+
+```bash
+# Check job status
+aws dynamodb query \
+  --table-name your-table \
+  --index-name TickerIndex \
+  --key-condition-expression "GSI1PK = :pk" \
+  --expression-attribute-values '{":pk": {"S": "JOB#enabled"}}'
+
+# Check orchestrator logs
+# Look for "No jobs to run" or timeout messages
+```
+
+#### 2. Job Status Not Updating
+
+- Verify `jobName` parameter matches initialization
+- Check CloudWatch logs for orchestration errors
+- Ensure worker completes without uncaught exceptions
+
+#### 3. Timeout Issues
+
+- Increase `maxRuntime` in job configuration
+- Optimize worker performance
+- Check for infinite loops or hanging operations
+
+#### 4. Duplicate Executions
+
+- Verify job initialization ran only once
+- Check for multiple job orchestrators running
+- Ensure proper status updates
+
+### Debug Commands
+
+```bash
+# Check job status
+aws dynamodb get-item \
+  --table-name your-table \
+  --key '{"PK": {"S": "JOB#universeBuild"}, "SK": {"S": "JOB"}}'
+
+# List all enabled jobs
+aws dynamodb query \
+  --table-name your-table \
+  --index-name TickerIndex \
+  --key-condition-expression "GSI1PK = :pk" \
+  --expression-attribute-values '{":pk": {"S": "JOB#enabled"}}'
+
+# Check running jobs
+aws dynamodb query \
+  --table-name your-table \
+  --index-name TickerIndex \
+  --key-condition-expression "GSI1PK = :enabled" \
+  --filter-expression "#status = :running" \
+  --expression-attribute-names '{"#status": "status"}' \
+  --expression-attribute-values '{"enabled": {"S": "JOB#enabled"}, "running": {"S": "running"}}'
+```
+
+## API Reference
+
+### Handler Wrapper Functions
+
+#### `withJobOrchestratedHandlerLifecycle(businessLogic, options)`
+
+**Parameters:**
+
+- `businessLogic` (Function): Pure business logic function
+- `options.handlerName` (String): Name for logging
+- `options.operation` (String): Operation name for error alerts
+- `options.validateEnvironment` (Function): Optional environment validation
+- `options.jobName` (String): Job name for orchestration updates
+
+**Returns:** Wrapped Lambda handler function
+
+**Behavior:**
+
+- Detects orchestration triggers automatically
+- Handles job status updates transparently
+- Provides comprehensive error handling
+- Supports both manual and orchestrated execution
+
+#### `withApiTriggerLifecycle(options)`
+
+**Parameters:**
+
+- `options.triggerHandlerName` (String): Name of trigger handler
+- `options.targetFunctionName` (String): Lambda function to invoke
+- `options.operation` (String): Operation name for error alerts
+- `options.validateEnvironment` (Function): Optional environment validation
+
+**Returns:** Wrapped trigger handler function
+
+**Behavior:**
+
+- Invokes target Lambda function asynchronously
+- Returns 202 Accepted immediately
+- Handles invocation errors appropriately
+
+### Job Orchestration Service
+
+#### `initializeJob(jobConfig)`
+
+**Parameters:**
+
+- `jobConfig.jobName` (String): Unique job identifier
+- `jobConfig.schedule` (String): Cron expression
+- `jobConfig.timezone` (String): Timezone for schedule
+- `jobConfig.targetFunction` (String): Lambda function name
+- `jobConfig.maxRuntime` (Number): Maximum execution time in seconds
+- `jobConfig.description` (String): Human-readable description
+- `jobConfig.enabled` (Boolean): Whether job is active
+
+**Returns:** Promise that resolves when job is initialized
+
+#### `getJobsToRun(logger)`
+
+**Parameters:**
+
+- `logger` (Object): Logger instance for debug information
+
+**Returns:** Array of job configurations ready for execution
+
+#### `updateJobStatus(jobName, status, executionId, error)`
+
+**Parameters:**
+
+- `jobName` (String): Job identifier
+- `status` (String): New status ("running", "completed", "failed", "timed_out")
+- `executionId` (String): Execution identifier
+- `error` (Error): Optional error object for failed status
+
+**Returns:** Promise that resolves when status is updated
+
+---
+
+_This comprehensive job orchestration pattern provides a robust foundation for complex serverless applications requiring reliable scheduled execution and monitoring._

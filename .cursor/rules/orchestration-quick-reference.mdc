@@ -1,0 +1,245 @@
+# Job Orchestration Quick Reference
+
+## Creating a New Scheduled Job
+
+### 1. Create Business Logic Worker
+
+```javascript
+// src/handlers/workers/my-job-worker.js
+const {
+  withJobOrchestratedHandlerLifecycle,
+} = require("../../utils/handler-wrapper");
+
+const businessLogic = async ({ logger, errorHandler, event, context }) => {
+  logger.info("Starting my business operation");
+
+  // Your business logic here
+  const result = await performBusinessLogic();
+
+  logger.info("Business operation completed", { result });
+  return result;
+};
+
+module.exports.handler = withJobOrchestratedHandlerLifecycle(businessLogic, {
+  handlerName: "my-job-worker",
+  operation: "my_business_operation",
+  validateEnvironment: validateEnvironment,
+  jobName: "myJob", // IMPORTANT: Must match job initialization
+});
+```
+
+### 2. Add Job Configuration
+
+```javascript
+// src/handlers/api/initialize-job-orchestration.js
+{
+  jobName: "myJob", // Must match worker's jobName
+  schedule: "0 9 * * ?", // Cron expression (9 AM daily)
+  timezone: "America/New_York",
+  targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-myJobWorker`,
+  maxRuntime: 300, // 5 minutes
+  description: "Description of what this job does",
+  enabled: true,
+}
+```
+
+### 3. Add Lambda Function
+
+```yaml
+# serverless.yml
+functions:
+  myJobWorker:
+    handler: src/handlers/workers/my-job-worker.handler
+    timeout: 300 # Must match maxRuntime
+```
+
+### 4. Deploy and Initialize
+
+```bash
+# Deploy
+serverless deploy
+
+# Initialize job
+curl -X POST https://your-api.com/api/initialize/job-orchestration
+```
+
+## Common Cron Expressions
+
+```javascript
+// Every minute
+"cron(* * * * ?)"
+
+// Every hour at minute 0
+"cron(0 * * * ?)"
+
+// Daily at 3 AM UTC
+"cron(0 3 * * ?)"
+
+// Daily at 9 AM Eastern
+"schedule": "cron(0 14 * * ?)", timezone: "America/New_York"
+
+// Weekly on Sunday at 9 AM Eastern
+"schedule": "cron(0 14 ? * SUN *)", timezone: "America/New_York"
+
+// Every 6 hours
+"cron(0 0,6,12,18 * * ?)"
+
+// Every 15 minutes
+"cron(0/15 * * * ?)"
+
+// Business hours (9 AM - 5 PM, weekdays)
+"cron(0 14-21 ? * MON-FRI)", timezone: "America/New_York"
+```
+
+## Debugging Commands
+
+### Check Job Status
+
+```bash
+# Get specific job
+aws dynamodb get-item \
+  --table-name your-table \
+  --key '{"PK": {"S": "JOB#myJob"}, "SK": {"S": "JOB"}}'
+
+# List all enabled jobs
+aws dynamodb query \
+  --table-name your-table \
+  --index-name TickerIndex \
+  --key-condition-expression "GSI1PK = :pk" \
+  --expression-attribute-values '{":pk": {"S": "JOB#enabled"}}'
+```
+
+### Check Running Jobs
+
+```bash
+aws dynamodb query \
+  --table-name your-table \
+  --index-name TickerIndex \
+  --key-condition-expression "GSI1PK = :enabled" \
+  --filter-expression "#status = :running" \
+  --expression-attribute-names '{"#status": "status"}' \
+  --expression-attribute-values '{"enabled": {"S": "JOB#enabled"}, "running": {"S": "running"}}'
+```
+
+### Test Worker Manually
+
+```bash
+# Invoke worker directly
+aws lambda invoke \
+  --function-name your-service-dev-myJobWorker \
+  --payload '{}' \
+  output.json
+```
+
+## Common Issues & Solutions
+
+### Job Not Running
+
+- ✅ Check if job is initialized: `POST /api/initialize/job-orchestration`
+- ✅ Verify cron expression is valid
+- ✅ Check timezone setting
+- ✅ Ensure job is enabled
+
+### Job Status Not Updating
+
+- ✅ Verify `jobName` in worker matches initialization
+- ✅ Check CloudWatch logs for orchestration errors
+- ✅ Ensure worker doesn't have uncaught exceptions
+
+### Worker Timing Out
+
+- ✅ Increase `maxRuntime` in job configuration
+- ✅ Increase Lambda `timeout` in serverless.yml
+- ✅ Optimize worker performance
+- ✅ Check for infinite loops
+
+### Duplicate Executions
+
+- ✅ Only initialize jobs once
+- ✅ Check for multiple job orchestrators
+- ✅ Verify proper status updates
+
+## Wrapper Function Reference
+
+### `withJobOrchestratedHandlerLifecycle(businessLogic, options)`
+
+**Required Options:**
+
+- `jobName`: Must match initialization exactly
+
+**Optional Options:**
+
+- `handlerName`: For logging (default: "job-orchestrated-handler")
+- `operation`: For error alerts (default: "job_orchestrated_operation")
+- `validateEnvironment`: Function to validate environment
+
+**Behavior:**
+
+- ✅ Detects orchestration triggers automatically
+- ✅ Updates job status transparently
+- ✅ Handles errors and marks jobs as failed
+- ✅ Works with both manual and orchestrated execution
+
+### `withApiTriggerLifecycle(options)`
+
+**Required Options:**
+
+- `targetFunctionName`: Worker function to invoke
+
+**Optional Options:**
+
+- `triggerHandlerName`: For logging
+- `operation`: For error alerts
+- `validateEnvironment`: Function to validate environment
+
+**Behavior:**
+
+- ✅ Invokes worker asynchronously (fire-and-forget)
+- ✅ Returns 202 Accepted immediately
+- ✅ Handles invocation errors
+
+## Environment Variables
+
+```bash
+# Required for all functions
+SERVICE_NAME=your-service
+STAGE=dev
+
+# Job orchestration
+JOB_ORCHESTRATOR_ENABLED=true
+MAX_JOB_CONCURRENCY=3
+
+# Worker specific
+MY_JOB_TIMEOUT=300
+MY_JOB_BATCH_SIZE=100
+```
+
+## Monitoring & Alerts
+
+### CloudWatch Logs
+
+- Job orchestrator logs every minute
+- Worker execution logs
+- Error alerts for failed jobs
+- Timeout warnings
+
+### Key Metrics to Monitor
+
+- Job execution duration vs maxRuntime
+- Success/failure rates
+- Queue depth (pending jobs)
+- Error patterns
+
+### Common Log Messages
+
+```
+"Job triggered by orchestrator"
+"Job status updated to completed"
+"Job status updated to failed"
+"No jobs to run this cycle"
+"Job timed out after X minutes"
+```
+
+---
+
+_Use this quick reference for rapid implementation and debugging of job orchestration patterns._

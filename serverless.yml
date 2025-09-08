@@ -3,6 +3,7 @@ service: chatgpt-trading-phase1
 plugins:
   - serverless-dotenv-plugin
   - serverless-offline
+  - serverless-dynamodb-local
 
 custom:
   dotenv:
@@ -24,6 +25,8 @@ custom:
       - LOGTAIL_API_KEY
       # Discovery configuration
       - FMP_API_KEY
+      - FMP_MIN_INTERVAL_MS
+      - FMP_MAX_CONCURRENCY
       - UNIVERSE_MIN_PRICE
       - UNIVERSE_MIN_MARKET_CAP
       - UNIVERSE_MAX_MARKET_CAP
@@ -36,6 +39,20 @@ custom:
   serverless-offline:
     httpPort: 3000
     lambdaPort: 3002
+
+  dynamodb:
+    stages:
+      - dev
+    start:
+      port: 8000
+      inMemory: true
+      migrate: true
+      seed: true
+    seed:
+      dev:
+        sources:
+          - table: ${self:service}-${opt:stage, self:provider.stage}
+            sources: [./dynamodb-seed.json]
 
 provider:
   name: aws
@@ -74,7 +91,11 @@ provider:
           Resource:
             - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-logProcessor"
             - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-universeBuild"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-universeBuildWorker"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-jobOrchestrator"
             - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-discoveryIngestion"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-discoveryIngestionWorker"
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-universeRankingWorker"
             - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-universeRanking"
             - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-marketResearch"
             - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-dailyTrading"
@@ -105,6 +126,8 @@ provider:
     API_GATEWAY_URL: !GetAtt HttpApi.ApiEndpoint
     # Discovery configuration
     FMP_API_KEY: ${file(.env.${opt:stage, 'dev'}.json):FMP_API_KEY}
+    FMP_MIN_INTERVAL_MS: ${file(.env.${opt:stage, 'dev'}.json):FMP_MIN_INTERVAL_MS}
+    FMP_MAX_CONCURRENCY: ${file(.env.${opt:stage, 'dev'}.json):FMP_MAX_CONCURRENCY}
     UNIVERSE_MIN_PRICE: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MIN_PRICE}
     UNIVERSE_MIN_MARKET_CAP: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MIN_MARKET_CAP}
     UNIVERSE_MAX_MARKET_CAP: ${file(.env.${opt:stage, 'dev'}.json):UNIVERSE_MAX_MARKET_CAP}
@@ -549,6 +572,32 @@ functions:
           method: post
           cors: true
 
+  # Trigger Email Report API - Production
+  # Manually triggers the email report generation and sending
+  # Used for on-demand report generation and testing
+  # Production: Yes - Manual report generation
+  triggerEmailReport:
+    handler: src/handlers/api/trigger-email-report.handler
+    timeout: 30
+    events:
+      - http:
+          path: /api/trigger/email-report
+          method: post
+          cors: true
+
+  # Trigger Migration - Production
+  # Manually runs the trade records migration to add GSI2 attributes
+  # Used for database schema migrations and data backfilling
+  # Production: Yes - Database maintenance
+  triggerMigration:
+    handler: src/handlers/api/trigger-migration.handler
+    timeout: 300 # 5 minutes for migration operations
+    events:
+      - http:
+          path: /api/trigger/migration
+          method: post
+          cors: true
+
   # ============================================================================
   # LOGGING SYSTEM - Production
   # Centralized logging infrastructure for monitoring and debugging
@@ -589,27 +638,71 @@ functions:
   # Builds daily micro-cap biotech universe from FMP screener data
   # Filters and validates tickers for the research pipeline
   # Production: Yes - Core discovery pipeline
-  universeBuild:
-    handler: src/handlers/scheduled/universe-build.handler
+  universeBuildWorker:
+    handler: src/handlers/workers/universe-build-worker.handler
     timeout: 300 # 5 minutes for universe build
-    events:
-      - schedule: cron(0 3 * * ? *) # 3:00 UTC daily (11:00 PM ET)
 
-  # Discovery Data Ingestion - Production
-  # Collects fundamentals and news data for universe tickers
-  # Processes data in batches with rate limiting and prioritization
+  # Discovery Ingestion Worker - Production
+  # Processes fundamentals and news data for universe tickers
+  # Handles batching, rate limiting, and data persistence
   # Production: Yes - Core data ingestion pipeline
-  discoveryIngestion:
-    handler: src/handlers/scheduled/discovery-ingestion.handler
+  discoveryIngestionWorker:
+    handler: src/handlers/workers/discovery-ingestion-worker.handler
     timeout: 600 # 10 minutes for ingestion
-    events:
-      - schedule: cron(0 0,6,12,18 * * ? *) # Every 6 hours at 00:00, 06:00, 12:00, 18:00 UTC
 
-  universeRanking:
-    handler: src/handlers/scheduled/universe-ranking.handler
+  # Universe Ranking Worker - Production
+  # Computes deterministic composite scores for universe tickers based on evidence
+  # Ranks candidates with transparent reason codes and evidence links
+  # Production: Yes - Core ranking pipeline
+  universeRankingWorker:
+    handler: src/handlers/workers/universe-ranking-worker.handler
     timeout: 300 # 5 minutes for ranking
+
+  # # Scheduled trigger for universe build (cron wrapper)
+  # universeBuildScheduled:
+  #   handler: src/handlers/scheduled/scheduled-universe-build-cron.handler
+  #   timeout: 30 # Quick invocation only
+  #   events:
+  #     - schedule: cron(0 3 * * ? *) # 3:00 UTC daily (11:00 PM ET)
+
+  # # Scheduled trigger for discovery ingestion (cron wrapper)
+  # discoveryIngestion:
+  #   handler: src/handlers/scheduled/discovery-ingestion.handler
+  #   timeout: 30 # Quick invocation only
+  #   events:
+  #     - schedule: cron(0 0,6,12,18 * * ? *) # Every 6 hours at 00:00, 06:00, 12:00, 18:00 UTC
+
+  # universeRanking:
+  #   handler: src/handlers/scheduled/universe-ranking.handler
+  #   timeout: 300 # 5 minutes for ranking
+  #   events:
+  #     - schedule: cron(0 4 * * ? *) # 4 AM ET (9 PM UTC) - After universe build, before research
+
+  # Initialize Job Orchestration - Production
+  # Sets up the job orchestration system with initial job configurations
+  # Used for system setup and job management initialization
+  # Production: Yes - System initialization
+  initializeJobOrchestration:
+    handler: src/handlers/api/initialize-job-orchestration.handler
+    timeout: 30
     events:
-      - schedule: cron(0 4 * * ? *) # 4 AM ET (9 PM UTC) - After universe build, before research
+      - http:
+          path: /api/initialize/job-orchestration
+          method: post
+          cors: true
+    name: chatgpt-trading-phase1-dev-initializeJobOrchestration
+
+  # Job Orchestrator - Production
+  # Runs every minute to check for and execute scheduled jobs
+  # Replaces individual cron schedules with dynamic orchestration
+  # Production: Yes - Core orchestration engine
+  jobOrchestrator:
+    handler: src/handlers/scheduled/job-orchestrator.handler
+    timeout: 300 # 5 minutes for orchestration cycle
+    environment:
+      MAX_JOB_CONCURRENCY: 3 # Limit concurrent job executions
+    events:
+      - schedule: cron(* * * * ? *) # Every minute
 
 resources:
   Resources:
@@ -629,6 +722,11 @@ resources:
             AttributeType: S
           - AttributeName: GSI1SK
             AttributeType: S
+          # GSI attributes for trade history queries
+          - AttributeName: GSI2PK
+            AttributeType: S
+          - AttributeName: GSI2SK
+            AttributeType: S
         KeySchema:
           - AttributeName: PK
             KeyType: HASH
@@ -640,6 +738,14 @@ resources:
               - AttributeName: GSI1PK
                 KeyType: HASH
               - AttributeName: GSI1SK
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+          - IndexName: TradeHistoryIndex
+            KeySchema:
+              - AttributeName: GSI2PK
+                KeyType: HASH
+              - AttributeName: GSI2SK
                 KeyType: RANGE
             Projection:
               ProjectionType: ALL

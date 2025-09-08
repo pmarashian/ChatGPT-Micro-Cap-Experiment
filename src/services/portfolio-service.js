@@ -127,14 +127,12 @@ class PortfolioService {
 
       const params = {
         TableName: this.tableName,
-        IndexName: "TickerIndex",
-        KeyConditionExpression:
-          "begins_with(GSI1SK, :prefix) AND GSI1SK >= :cutoff",
+        IndexName: "TradeHistoryIndex",
+        KeyConditionExpression: "GSI2PK = :pk AND GSI2SK >= :cutoff",
         ExpressionAttributeValues: {
-          ":prefix": "TRADE#",
+          ":pk": "ALL_TRADES",
           ":cutoff": `TRADE#${cutoffIso}`,
         },
-        // Note: ScanIndexForward removed - query returns items in index order
       };
 
       const result = await this.dynamodb.query(params).promise();
@@ -203,6 +201,9 @@ class PortfolioService {
         // GSI for ticker queries
         GSI1PK: trade.ticker,
         GSI1SK: `TRADE#${timestamp}`,
+        // GSI for trade history queries (all trades by time)
+        GSI2PK: "ALL_TRADES",
+        GSI2SK: `TRADE#${timestamp}`,
         // Legacy id for backward compatibility
         id: `trade#${timestamp.slice(0, 10)}#${tradeId}`,
         // Data

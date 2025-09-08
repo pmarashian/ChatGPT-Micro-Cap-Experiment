@@ -197,9 +197,16 @@ async function executeTrades(decisions, brokerageService) {
 
   for (const decision of decisions) {
     try {
-      // Skip HOLD decisions
+      // Skip HOLD and RESEARCH decisions (not executable trades)
       if (decision.action === "HOLD") {
         logger.debug(`Skipping HOLD decision for ${decision.ticker}`);
+        continue;
+      }
+
+      if (decision.action === "RESEARCH") {
+        logger.debug(
+          `Skipping RESEARCH decision for ${decision.ticker} - further analysis needed`
+        );
         continue;
       }
 
@@ -213,6 +220,36 @@ async function executeTrades(decisions, brokerageService) {
           success: true,
           simulated: true,
           message: "Trade simulated (execution disabled)",
+        });
+        continue;
+      }
+
+      // RESEARCH actions should not reach here due to early skip above, but add safeguard
+      if (decision.action === "RESEARCH") {
+        logger.warn(
+          `RESEARCH action should have been skipped: ${decision.ticker}`
+        );
+        results.push({
+          ...decision,
+          success: false,
+          error: "RESEARCH actions are not executable trades",
+          message: "Skipped - further research needed",
+        });
+        continue;
+      }
+
+      // Validate tradability before executing trade
+      const isTradable = await brokerageService.isTradable(decision.ticker);
+      if (!isTradable) {
+        logger.warn(
+          `Skipping ${decision.action} for ${decision.ticker} - not tradable on Alpaca`
+        );
+        results.push({
+          ...decision,
+          success: false,
+          error: "Asset is not tradable on Alpaca",
+          message: "Skipped - not tradable",
+          timestamp: new Date().toISOString(),
         });
         continue;
       }

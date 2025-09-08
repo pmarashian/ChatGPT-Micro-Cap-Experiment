@@ -54,7 +54,7 @@ class FMPService {
         this.logger.warn(
           `FMP error: ${error.config?.url} - ${
             error.response?.status || error.message
-          }`
+          }: ${error.message}`
         );
         return Promise.reject(error);
       }

@@ -8,6 +8,7 @@ const ErrorHandler = require("../../utils/error-handler");
 const { getEnvConfig } = require("../../config/environment");
 const { DYNAMODB_TABLES, DISCOVERY_CONFIG } = require("../../config/constants");
 const FMPService = require("../fmp-service");
+const BrokerageService = require("../brokerage-service");
 
 class UniverseService {
   constructor() {
@@ -25,6 +26,9 @@ class UniverseService {
 
     // FMP service
     this.fmp = new FMPService();
+
+    // Brokerage service for tradability checks
+    this.brokerage = new BrokerageService();
 
     // Configuration defaults
     this.config = {
@@ -93,15 +97,21 @@ class UniverseService {
       this.logger.info(`Calculated ADV for ${advData.length} companies`);
 
       // Step 4: Apply ADV filter
-      const finalUniverse = this.applyADVFilter(advData);
+      const advFiltered = this.applyADVFilter(advData);
       this.logger.info(
-        `Applied ADV filter: ${finalUniverse.length} companies in final universe`
+        `Applied ADV filter: ${advFiltered.length} companies remaining`
       );
 
-      // Step 5: Create universe snapshot
+      // Step 5: Apply tradability filter
+      const finalUniverse = await this.applyTradabilityFilter(advFiltered);
+      this.logger.info(
+        `Applied tradability filter: ${finalUniverse.length} companies in final universe`
+      );
+
+      // Step 6: Create universe snapshot
       const universeSnapshot = this.createUniverseSnapshot(finalUniverse);
 
-      // Step 6: Persist to DynamoDB
+      // Step 7: Persist to DynamoDB
       await this.persistUniverseSnapshot(universeSnapshot);
 
       this.logger.info("Universe build completed successfully", {
@@ -296,6 +306,59 @@ class UniverseService {
   }
 
   /**
+   * Apply tradability filter using Alpaca API
+   */
+  async applyTradabilityFilter(companies) {
+    const tradableCompanies = [];
+    const batches = this.createBatches(companies, this.config.batchSize);
+
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      this.logger.debug(
+        `Processing tradability batch ${i + 1}/${batches.length} (${
+          batch.length
+        } tickers)`
+      );
+
+      const batchPromises = batch.map(async (company) => {
+        try {
+          const isTradable = await this.brokerage.isTradable(company.symbol);
+          if (isTradable) {
+            return {
+              ...company,
+              tradable: true,
+            };
+          } else {
+            // this.logger.debug(
+            //   `Excluding ${company.symbol} from universe (not tradable on Alpaca)`
+            // );
+            return null;
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to check tradability for ${company.symbol}: ${error.message}. Excluding from universe.`
+          );
+          return null; // Exclude if we can't verify tradability
+        }
+      });
+
+      const batchResults = await Promise.allSettled(batchPromises);
+      batchResults.forEach((result) => {
+        if (result.status === "fulfilled" && result.value) {
+          tradableCompanies.push(result.value);
+        }
+      });
+
+      // Small delay between batches to avoid rate limiting
+      if (i < batches.length - 1) {
+        await this.sleep(200);
+      }
+    }
+
+    return tradableCompanies;
+  }
+
+  /**
    * Create universe snapshot object
    */
   createUniverseSnapshot(companies) {
@@ -323,6 +386,7 @@ class UniverseService {
         exchange: company.exchangeShortName,
         industry: company.industry,
         sector: company.sector,
+        tradable: company.tradable || false,
       })),
       stats: {
         totalTickers: companies.length,
@@ -396,7 +460,7 @@ class UniverseService {
 
       return null;
     } catch (error) {
-      this.logger.error("Failed to get latest universe", error);
+      this.logger.error("Failed to get latest universe", { error });
       return null;
     }
   }

@@ -1144,10 +1144,10 @@ class AIMemoryService {
         })),
       };
 
-      this.logger.debug(`Retrieved evidence bundle for ${ticker}`, {
-        hasFundamentals: !!bundle.fundamentals,
-        newsCount: bundle.news.length,
-      });
+      // this.logger.debug(`Retrieved evidence bundle for ${ticker}`, {
+      //   hasFundamentals: !!bundle.fundamentals,
+      //   newsCount: bundle.news.length,
+      // });
 
       return bundle;
     } catch (error) {

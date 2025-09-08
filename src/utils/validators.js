@@ -51,11 +51,12 @@ class Validators {
 
       return true;
     } catch (error) {
-      this.errorHandler.handleValidationError(
-        "aiDecisionResponse",
-        response,
-        "valid schema"
-      );
+      // Log the specific validation error with details
+      this.errorHandler.logger.error("AI decision response validation failed", {
+        error: error.message,
+        response: response,
+        type: "VALIDATION_ERROR",
+      });
       throw error;
     }
   }
@@ -71,7 +72,7 @@ class Validators {
     // Required fields
     const required = ["action", "ticker", "shares"];
     required.forEach((field) => {
-      if (!decision[field]) {
+      if (decision[field] === undefined || decision[field] === null) {
         throw new Error(`Decision ${index}: ${field} is required`);
       }
     });
@@ -328,11 +329,12 @@ class Validators {
 
       return true;
     } catch (error) {
-      this.errorHandler.handleValidationError(
-        "aiResearchResponse",
-        response,
-        "valid research schema with citations"
-      );
+      // Log the specific validation error with details
+      this.errorHandler.logger.error("AI research response validation failed", {
+        error: error.message,
+        response: response,
+        type: "VALIDATION_ERROR",
+      });
       throw error;
     }
   }
