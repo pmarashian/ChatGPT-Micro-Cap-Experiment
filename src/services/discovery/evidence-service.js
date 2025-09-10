@@ -3,6 +3,12 @@
  * Assembles evidence bundles from persisted fundamentals and news data with recency gating
  */
 
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  QueryCommand,
+  ScanCommand,
+} = require("@aws-sdk/lib-dynamodb");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { getEnvConfig } = require("../../config/environment");
@@ -15,9 +21,10 @@ class EvidenceService {
     this.envConfig = getEnvConfig();
 
     // Initialize DynamoDB
-    this.dynamodb = new (require("aws-sdk").DynamoDB.DocumentClient)({
+    const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "us-east-1",
     });
+    this.dynamodb = DynamoDBDocumentClient.from(client);
 
     this.tableName =
       process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;
@@ -185,7 +192,7 @@ class EvidenceService {
         ScanIndexForward: false,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       if (!result.Items || result.Items.length === 0) {
         return null;
@@ -238,7 +245,7 @@ class EvidenceService {
         Limit: 20, // Get more than we need, then filter
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       if (!result.Items || result.Items.length === 0) {
         return [];
@@ -291,7 +298,7 @@ class EvidenceService {
         // Note: ScanIndexForward removed - query returns items in index order
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       if (!result.Items || result.Items.length === 0) {
         return {
@@ -430,7 +437,7 @@ class EvidenceService {
         },
       };
 
-      const result = await this.dynamodb.scan(params).promise();
+      const result = await this.dynamodb.send(new ScanCommand(params));
 
       if (!result.Items || result.Items.length === 0) {
         return {

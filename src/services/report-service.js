@@ -3,7 +3,12 @@
  * Persists human-readable daily/weekly AI reports to DynamoDB and retrieves them.
  */
 
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+} = require("@aws-sdk/lib-dynamodb");
 const Logger = require("../utils/logger");
 const ErrorHandler = require("../utils/error-handler");
 const { DYNAMODB_TABLES, ITEM_TYPES } = require("../config/constants");
@@ -13,9 +18,10 @@ class ReportService {
     this.logger = new Logger("report-service");
     this.errorHandler = new ErrorHandler("report-service");
 
-    this.dynamodb = new AWS.DynamoDB.DocumentClient({
+    const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "us-east-1",
     });
+    this.dynamodb = DynamoDBDocumentClient.from(client);
 
     this.tableName =
       process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;
@@ -51,7 +57,7 @@ class ReportService {
       Item: item,
     };
 
-    await this.dynamodb.put(params).promise();
+    await this.dynamodb.send(new PutCommand(params));
     this.logger.info("Report saved", { period, date: sk });
     return item;
   }
@@ -68,7 +74,7 @@ class ReportService {
       },
     };
 
-    const result = await this.dynamodb.get(params).promise();
+    const result = await this.dynamodb.send(new GetCommand(params));
     return result.Item || null;
   }
 }

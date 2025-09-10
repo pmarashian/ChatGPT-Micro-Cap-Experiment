@@ -1119,62 +1119,111 @@ Please revise your analysis to include proper citations for ALL evaluated compan
    */
   formatPriceVolumeTable(marketData) {
     const lines = [];
-    lines.push(`[ Price & Volume ]`);
-    lines.push(`Ticker            Close     % Chg          Volume`);
-    lines.push(`-------------------------------------------------`);
+    lines.push(`[ Price & Volume Analysis ]`);
+    lines.push(
+      `Ticker            Close     1D %Chg    7D %Chg   30D %Chg        Volume`
+    );
+    lines.push(
+      `------------------------------------------------------------------------`
+    );
 
     // Extract tickers from marketData object (includes portfolio + base + ranked tickers)
     const tickers = Object.keys(marketData).sort();
+    let validTickersCount = 0;
 
     tickers.forEach((ticker) => {
       const data = marketData[ticker];
-      const tickerStr = ticker.padEnd(16);
 
-      if (data && data.data && data.data.length > 0) {
-        const latest = data.data[data.data.length - 1];
-
-        // Get current price
-        const close = latest.close || latest.price || 0;
-        // this.logger.debug(`Using REAL market data for ${ticker}`, {
-        //   source: data.source,
-        //   close,
-        //   date: latest.date,
-        //   volume: latest.volume,
-        // });
-
-        // Calculate % change using previous day's data
-        let changePercent = 0;
-        if (data.data.length > 1) {
-          const previous = data.data[data.data.length - 2];
-          const previousClose = previous.close || previous.price || 0;
-          if (previousClose > 0) {
-            changePercent = ((close - previousClose) / previousClose) * 100;
-          }
-        }
-
-        // Get volume
-        const volume = latest.volume || 0;
-
-        // Format the line
-        const closeStr = close.toFixed(2).padStart(8);
-        const changeStr = `${
-          changePercent >= 0 ? "+" : ""
-        }${changePercent.toFixed(2)}%`.padStart(8);
-        const volumeStr = volume.toLocaleString().padStart(12);
-
-        lines.push(`${tickerStr}${closeStr}${changeStr}${volumeStr}`);
-      } else {
-        const close = 0;
-        const changePercent = 0;
-        const volume = 0;
-
-        const closeStr = close.toFixed(2).padStart(8);
-        const changeStr = `${""}${changePercent.toFixed(2)}%`.padStart(8);
-        const volumeStr = volume.toLocaleString().padStart(12);
-
-        lines.push(`${tickerStr}${closeStr}${changeStr}${volumeStr}`);
+      // Skip tickers with no data - don't include them in the table
+      if (!data || !data.data || data.data.length === 0) {
+        return; // Skip this ticker entirely
       }
+
+      const tickerStr = ticker.padEnd(16);
+      validTickersCount++;
+
+      const latest = data.data[data.data.length - 1];
+
+      // Get current price
+      const close = latest.close || latest.price || 0;
+
+      // Calculate 1-day % change using previous day's data
+      let changePercent1D = 0;
+      if (data.data.length > 1) {
+        const previous = data.data[data.data.length - 2];
+        const previousClose = previous.close || previous.price || 0;
+        if (previousClose > 0) {
+          changePercent1D = ((close - previousClose) / previousClose) * 100;
+        }
+      }
+
+      // Calculate 7-day % change using data from 7 days ago
+      let changePercent7D = 0;
+      if (data.data.length > 7) {
+        const sevenDaysAgo = data.data[data.data.length - 8];
+        const sevenDaysAgoClose = sevenDaysAgo.close || sevenDaysAgo.price || 0;
+        if (sevenDaysAgoClose > 0) {
+          changePercent7D =
+            ((close - sevenDaysAgoClose) / sevenDaysAgoClose) * 100;
+        }
+      } else if (data.data.length > 1) {
+        // If less than 7 days of data, show available period change
+        const earliest = data.data[0];
+        const earliestClose = earliest.close || earliest.price || 0;
+        if (earliestClose > 0) {
+          changePercent7D = ((close - earliestClose) / earliestClose) * 100;
+        }
+      }
+
+      // Calculate 30-day % change using data from 30 days ago
+      let changePercent30D = 0;
+      if (data.data.length > 30) {
+        const thirtyDaysAgo = data.data[data.data.length - 31];
+        const thirtyDaysAgoClose =
+          thirtyDaysAgo.close || thirtyDaysAgo.price || 0;
+        if (thirtyDaysAgoClose > 0) {
+          changePercent30D =
+            ((close - thirtyDaysAgoClose) / thirtyDaysAgoClose) * 100;
+        }
+      } else if (data.data.length > 1) {
+        // If less than 30 days of data, show available period change
+        const earliest = data.data[0];
+        const earliestClose = earliest.close || earliest.price || 0;
+        if (earliestClose > 0) {
+          changePercent30D = ((close - earliestClose) / earliestClose) * 100;
+        }
+      }
+
+      // Get volume
+      const volume = latest.volume || 0;
+
+      // Format the line
+      const closeStr = close.toFixed(2).padStart(8);
+      const change1DStr = `${
+        changePercent1D >= 0 ? "+" : ""
+      }${changePercent1D.toFixed(2)}%`.padStart(10);
+      const change7DStr = `${
+        changePercent7D >= 0 ? "+" : ""
+      }${changePercent7D.toFixed(2)}%`.padStart(10);
+      const change30DStr = `${
+        changePercent30D >= 0 ? "+" : ""
+      }${changePercent30D.toFixed(2)}%`.padStart(10);
+      const volumeStr = volume.toLocaleString().padStart(14);
+
+      lines.push(
+        `${tickerStr}${closeStr}${change1DStr}${change7DStr}${change30DStr}${volumeStr}`
+      );
     });
+
+    // Add summary if we have valid tickers
+    if (validTickersCount === 0) {
+      lines.push("No market data available for analysis.");
+    } else {
+      lines.push(
+        `------------------------------------------------------------------------`
+      );
+      lines.push(`Total tickers with data: ${validTickersCount}`);
+    }
 
     return lines.join("\n");
   }

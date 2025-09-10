@@ -5,6 +5,7 @@
 
 const PortfolioService = require("../portfolio-service");
 const MarketDataService = require("../market-data-service");
+const BrokerageService = require("../brokerage-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 
@@ -32,35 +33,65 @@ async function performPortfolioUpdate(options = {}) {
     // Initialize services
     const portfolioService = new PortfolioService();
     const marketDataService = new MarketDataService();
+    const brokerageService = new BrokerageService();
 
-    // 1. Get current portfolio from dynamo
-    logInstance.info("Fetching current portfolio");
-    const portfolio = await portfolioService.getCurrentPortfolio();
+    // 1. Get current portfolio from Alpaca (source of truth)
+    logInstance.info("Fetching current portfolio from Alpaca");
+    const alpacaPositions = await brokerageService.getPortfolio();
+    const alpacaAccount = await brokerageService.getAccountInfo();
 
-    if (!portfolio.positions || portfolio.positions.length === 0) {
-      logInstance.info("No positions to update");
+    if (!alpacaPositions || alpacaPositions.length === 0) {
+      logInstance.info("No positions in Alpaca account");
+
+      // Get local portfolio to preserve structure
+      const localPortfolio = await portfolioService.getCurrentPortfolio();
+
+      // Create updated portfolio with Alpaca account info
+      const updatedPortfolio = {
+        ...localPortfolio,
+        cash: alpacaAccount.cash,
+        totalValue: alpacaAccount.portfolioValue,
+        equity: alpacaAccount.equity,
+        positions: [],
+        lastUpdated: new Date().toISOString(),
+      };
+
+      await portfolioService.savePortfolio(updatedPortfolio);
+
       return {
-        message: "No positions to update",
-        portfolioValue: portfolio.totalValue,
-        cash: portfolio.cash,
+        message: "No positions to update - portfolio synced with Alpaca",
+        portfolioValue: alpacaAccount.portfolioValue,
+        cash: alpacaAccount.cash,
         timestamp: new Date().toISOString(),
       };
     }
 
-    // 2. Get latest market data for all positions
-    logInstance.info("Fetching market data for portfolio positions");
-    const marketData = await marketDataService.getPortfolioMarketData(
-      portfolio
+    // 2. Get local portfolio to preserve cost basis and stop losses
+    logInstance.info("Fetching local portfolio data");
+    const localPortfolio = await portfolioService.getCurrentPortfolio();
+
+    // 3. Merge Alpaca data with local data (preserve cost basis, stop losses, etc.)
+    logInstance.info("Merging Alpaca data with local portfolio");
+    const mergedPortfolio = await portfolioService.syncWithBrokerageData(
+      localPortfolio,
+      alpacaPositions,
+      alpacaAccount
     );
 
-    // 3. Update portfolio positions with latest prices
-    logInstance.info("Updating portfolio positions");
+    // 4. Get latest market data for all positions
+    logInstance.info("Fetching market data for portfolio positions");
+    const marketData = await marketDataService.getPortfolioMarketData(
+      mergedPortfolio
+    );
+
+    // 5. Update portfolio positions with latest prices
+    logInstance.info("Updating portfolio positions with market data");
     const updatedPortfolio = await portfolioService.updatePortfolioPositions(
-      portfolio,
+      mergedPortfolio,
       marketData
     );
 
-    // 4. Calculate updated performance metrics
+    // 6. Calculate updated performance metrics
     logInstance.info("Calculating performance metrics");
     const performanceMetrics =
       await portfolioService.calculatePerformanceMetrics(updatedPortfolio);

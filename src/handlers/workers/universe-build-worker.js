@@ -17,8 +17,14 @@ const {
  * Pure business logic for universe build
  * No orchestration concerns - just the core functionality
  */
-const businessLogic = async ({ logger, errorHandler, event, context }) => {
+const businessLogic = async ({ logger, errorHandler }) => {
   // Execute universe build using shared orchestrator
+
+  logger.info("Starting universe build", {
+    invocationType: "scheduled",
+  });
+
+  // Execute actual universe build
   const universeSnapshot = await performUniverseBuild({
     invocationType: "scheduled",
     logger: logger,

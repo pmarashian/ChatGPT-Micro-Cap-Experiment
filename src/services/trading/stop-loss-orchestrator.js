@@ -87,9 +87,9 @@ async function performStopLossMonitoring(options = {}) {
 
         const priceChange =
           ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
-        const stopLossTriggered = currentPrice <= stopLossPrice;
+        const shouldTriggerStopLoss = currentPrice <= stopLossPrice;
 
-        if (stopLossTriggered) {
+        if (shouldTriggerStopLoss) {
           logInstance.warn(`🚨 Stop-loss triggered for ${ticker}`, {
             ticker,
             currentPrice,
@@ -145,7 +145,7 @@ async function performStopLossMonitoring(options = {}) {
     return {
       message: "Stop-loss monitoring completed",
       positionsMonitored: stopLossResults.length,
-      stopLossesTriggered,
+      stopLossesTriggered: stopLossTriggered,
       results: stopLossResults,
       timestamp: new Date().toISOString(),
     };

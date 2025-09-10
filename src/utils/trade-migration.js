@@ -3,7 +3,8 @@
  * This ensures backward compatibility with the new TradeHistoryIndex GSI
  */
 
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient } = require("@aws-sdk/lib-dynamodb");
 const Logger = require("./logger");
 const { DYNAMODB_TABLES } = require("../config/constants");
 const { getEnvConfig } = require("../config/environment");
@@ -16,9 +17,10 @@ async function migrateTradeRecords() {
   const envConfig = getEnvConfig();
 
   // Initialize DynamoDB
-  const dynamodb = new AWS.DynamoDB.DocumentClient({
+  const client = new DynamoDBClient({
     region: process.env.AWS_REGION || "us-east-1",
   });
+  const dynamodb = DynamoDBDocumentClient.from(client);
 
   const tableName =
     process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;

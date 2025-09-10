@@ -6,15 +6,17 @@
 const fs = require("fs");
 const path = require("path");
 const csv = require("csv-parser");
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient } = require("@aws-sdk/lib-dynamodb");
 const Logger = require("./logger");
 
 class DataMigration {
   constructor() {
     this.logger = new Logger("data-migration");
-    this.dynamodb = new AWS.DynamoDB.DocumentClient({
+    const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "us-east-1",
     });
+    this.dynamodb = DynamoDBDocumentClient.from(client);
     this.tableName = process.env.TRADING_TABLE_NAME || "TradingTable";
   }
 

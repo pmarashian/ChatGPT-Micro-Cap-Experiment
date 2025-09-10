@@ -7,7 +7,8 @@ const PortfolioService = require("../../services/portfolio-service");
 const BrokerageService = require("../../services/brokerage-service");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient } = require("@aws-sdk/lib-dynamodb");
 
 let logger;
 let errorHandler;

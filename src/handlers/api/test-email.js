@@ -3,7 +3,8 @@
  * Sends a test email to verify SES configuration and email sending functionality
  */
 
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient } = require("@aws-sdk/lib-dynamodb");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { getEnvConfig } = require("../../config/environment");

@@ -574,16 +574,13 @@ functions:
           method: post
           cors: true
 
-  # Trigger Migration - Production
-  # Manually runs the trade records migration to add GSI2 attributes
-  # Used for database schema migrations and data backfilling
-  # Production: Yes - Database maintenance
-  triggerMigration:
-    handler: src/handlers/api/trigger-migration.handler
-    timeout: 300 # 5 minutes for migration operations
+  # Trigger Generic API - Production
+  # Production: No
+  triggerGenericApi:
+    handler: src/handlers/api/trigger-generic-api.handler
     events:
       - http:
-          path: /api/trigger/migration
+          path: /api/trigger/generic-api
           method: post
           cors: true
 
@@ -688,7 +685,7 @@ functions:
     handler: src/handlers/scheduled/job-orchestrator.handler
     timeout: 300 # 5 minutes for orchestration cycle
     environment:
-      MAX_JOB_CONCURRENCY: 3 # Limit concurrent job executions
+      MAX_JOB_CONCURRENCY: 1 # Limit concurrent job executions
     events:
       - schedule: cron(* * * * ? *) # Every minute
 

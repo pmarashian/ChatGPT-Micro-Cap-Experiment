@@ -219,9 +219,13 @@ Based on your analysis, provide comprehensive research findings in the following
  * @returns {string} Formatted portfolio snapshot
  */
 function formatPortfolioSnapshot(portfolioData) {
+  // Handle case where portfolio data doesn't exist yet
+  const totalValue = portfolioData?.totalValue || 100;
+  const cash = portfolioData?.cash || 100;
+
   return `[ Snapshot ]
-Latest Portfolio Equity: $${portfolioData.totalValue?.toFixed(2) || "0.00"}
-Cash Balance: $${portfolioData.cash?.toFixed(2) || "0.00"}`;
+Latest Portfolio Equity: $${totalValue.toFixed(2)}
+Cash Balance: $${cash.toFixed(2)}`;
 }
 
 /**

@@ -1,12 +1,8 @@
 const { Logtail } = require("@logtail/node");
+const { isOffline } = require("../../utils/environment");
 
 // Load environment variables for offline development
-const isOffline =
-  process.env.IS_OFFLINE === "true" ||
-  process.env.SERVERLESS_OFFLINE_HTTP_PORT ||
-  !process.env.AWS_LAMBDA_FUNCTION_NAME;
-
-if (isOffline) {
+if (isOffline()) {
   require("dotenv").config({
     path: ".env.dev",
   });
@@ -31,7 +27,7 @@ module.exports.logProcessor = async (event) => {
       return;
     }
 
-    if (isOffline) {
+    if (isOffline()) {
       for (const log of logs) {
         if (log.level === "info") {
           console.log(

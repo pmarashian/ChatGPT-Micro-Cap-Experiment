@@ -3,6 +3,12 @@
  * Handles ingestion of fundamentals and news data from FMP with batching, rate limiting, and backoff
  */
 
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  QueryCommand,
+} = require("@aws-sdk/lib-dynamodb");
 const axios = require("axios");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
@@ -16,9 +22,10 @@ class IngestionService {
     this.envConfig = getEnvConfig();
 
     // Initialize DynamoDB
-    this.dynamodb = new (require("aws-sdk").DynamoDB.DocumentClient)({
+    const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "us-east-1",
     });
+    this.dynamodb = DynamoDBDocumentClient.from(client);
 
     this.tableName =
       process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;
@@ -443,7 +450,7 @@ class IngestionService {
         Item: item,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
 
       // this.logger.debug(`Persisted fundamentals for ${ticker}`, {
       //   asOfDate: item.asOfDate,
@@ -507,7 +514,7 @@ class IngestionService {
         Item: item,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
 
       // this.logger.debug(`Persisted news for ${ticker}`, {
       //   headline: item.headline.substring(0, 50) + "...",
@@ -629,7 +636,7 @@ class IngestionService {
         Limit: 1,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
       return result.Items && result.Items.length > 0;
     } catch (error) {
       this.logger.warn("Failed to check for duplicate news", error);
@@ -663,7 +670,7 @@ class IngestionService {
         Limit: 1,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
       return result.Items && result.Items.length > 0;
     } catch (error) {
       this.logger.warn(
@@ -743,7 +750,7 @@ class IngestionService {
         Limit: 1,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       if (result.Items && result.Items.length > 0) {
         return new Date(result.Items[0].SK);

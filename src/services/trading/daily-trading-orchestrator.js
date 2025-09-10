@@ -18,6 +18,7 @@ const ErrorHandler = require("../../utils/error-handler");
  */
 async function executeTrades(decisions, brokerageService) {
   const results = [];
+  const logger = new Logger("daily-trading-orchestrator");
 
   // Enforce portfolio-level utilization target for BUY orders
   try {
@@ -54,14 +55,14 @@ async function executeTrades(decisions, brokerageService) {
       if (intendedCost > remainingBudget && remainingBudget > 0) {
         const adjustedShares = Math.floor(remainingBudget / price);
         if (adjustedShares >= 1) {
-          console.log(
+          logger.debug(
             `Adjusting ${d.ticker} shares from ${d.shares} to ${adjustedShares} to respect utilization target`
           );
           d.shares = adjustedShares;
           remainingBudget -= adjustedShares * price;
         } else {
           // No budget left for at least 1 share; convert to HOLD
-          console.log(
+          logger.debug(
             `Skipping ${d.ticker} BUY due to utilization cap; insufficient remaining budget`
           );
           d.action = "HOLD";
@@ -71,24 +72,19 @@ async function executeTrades(decisions, brokerageService) {
       }
     }
   } catch (e) {
-    console.warn(
-      "Utilization enforcement skipped due to error",
-      e?.message || e
-    );
+    logger.warn("Utilization enforcement skipped due to error", {
+      error: e?.message || e,
+    });
   }
 
   for (const decision of decisions) {
     try {
       // Skip HOLD and RESEARCH decisions (not executable trades)
       if (decision.action === "HOLD") {
-        console.debug(`Skipping HOLD decision for ${decision.ticker}`);
         continue;
       }
 
       if (decision.action === "RESEARCH") {
-        console.debug(
-          `Skipping RESEARCH decision for ${decision.ticker} - further analysis needed`
-        );
         continue;
       }
 
@@ -108,9 +104,6 @@ async function executeTrades(decisions, brokerageService) {
 
       // RESEARCH actions should not reach here due to early skip above, but add safeguard
       if (decision.action === "RESEARCH") {
-        console.warn(
-          `RESEARCH action should have been skipped: ${decision.ticker}`
-        );
         results.push({
           ...decision,
           success: false,
@@ -123,9 +116,6 @@ async function executeTrades(decisions, brokerageService) {
       // Validate tradability before executing trade
       const isTradable = await brokerageService.isTradable(decision.ticker);
       if (!isTradable) {
-        console.warn(
-          `Skipping ${decision.action} for ${decision.ticker} - not tradable on Alpaca`
-        );
         results.push({
           ...decision,
           success: false,

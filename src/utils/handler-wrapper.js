@@ -202,9 +202,14 @@ function withScheduledHandlerLifecycle(businessLogic, options = {}) {
   } = options;
 
   return async (event, context) => {
+    // Generate unique ID for offline development if awsRequestId is not available
+    const awsRequestId = context?.awsRequestId;
+
     // Initialize services
-    const logger = new Logger(handlerName);
-    const errorHandler = new ErrorHandler(handlerName);
+    const logger = new Logger(handlerName, { uniqueId: awsRequestId });
+    const errorHandler = new ErrorHandler(handlerName, {
+      uniqueId: awsRequestId,
+    });
 
     try {
       // Log function start
@@ -221,10 +226,18 @@ function withScheduledHandlerLifecycle(businessLogic, options = {}) {
         errorHandler,
         event,
         context,
+        uniqueId: awsRequestId,
       });
 
       // Log function end
       logger.logLambdaEnd(Date.now() - context.getRemainingTimeInMillis());
+
+      // Force flush all remaining logs before throwing error
+      try {
+        await logger.flush();
+      } catch (flushError) {
+        // Silent fail - don't let flush errors mask the original error
+      }
 
       return result;
     } catch (error) {
@@ -245,6 +258,13 @@ function withScheduledHandlerLifecycle(businessLogic, options = {}) {
         Date.now() - context.getRemainingTimeInMillis(),
         false
       );
+
+      // Force flush all remaining logs before throwing error
+      try {
+        await logger.flush();
+      } catch (flushError) {
+        // Silent fail - don't let flush errors mask the original error
+      }
 
       throw error;
     }
@@ -271,11 +291,16 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
   } = options;
 
   return async (event, context) => {
+    const uniqueId = event?.executionId || context?.awsRequestId;
+
     // Initialize services
-    const logger = new Logger(handlerName);
-    const errorHandler = new ErrorHandler(handlerName);
+    const logger = new Logger(handlerName, { uniqueId });
+    const errorHandler = new ErrorHandler(handlerName, {
+      uniqueId: context?.awsRequestId,
+    });
 
     // Check if this is triggered by the job orchestrator
+    // This is set in job-orchestrator.js
     const isOrchestrationTrigger = event?.source === "orchestration-trigger";
     const executionId = event?.executionId;
 
@@ -302,6 +327,7 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
         errorHandler,
         event,
         context,
+        executionId,
       });
 
       // For orchestration-triggered jobs, include completion info in response
@@ -315,6 +341,8 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
 
         // Return enhanced result for orchestrator
         return {
+          // in case there is a typo in the worker, we can use StatusCode or statusCode
+          StatusCode: 200,
           statusCode: 200,
           ...result,
           _orchestration: {
@@ -401,8 +429,12 @@ function withApiTriggerLifecycle(options = {}) {
 
   return async (event, context) => {
     // Initialize services
-    const logger = new Logger(triggerHandlerName);
-    const errorHandler = new ErrorHandler(triggerHandlerName);
+    const logger = new Logger(triggerHandlerName, {
+      uniqueId: context?.awsRequestId,
+    });
+    const errorHandler = new ErrorHandler(triggerHandlerName, {
+      uniqueId: context?.awsRequestId,
+    });
     let lambda;
 
     try {

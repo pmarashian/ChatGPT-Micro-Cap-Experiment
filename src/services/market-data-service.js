@@ -240,8 +240,8 @@ class MarketDataService {
       finalTickerList: tickers.sort(),
     });
 
-    // Fetch data for all tickers concurrently
-    const promises = tickers.map((ticker) => this.getStockData(ticker, "1d"));
+    // Fetch data for all tickers concurrently (get 2 days for change calculation)
+    const promises = tickers.map((ticker) => this.getStockData(ticker, "2d"));
     const results = await Promise.allSettled(promises);
 
     // Process results
@@ -366,6 +366,14 @@ class MarketDataService {
       // Last trading day window
       const lastTradingDay = this.getLastTradingDate(now);
       startDate = new Date(lastTradingDay);
+      endDate = new Date(lastTradingDay);
+      endDate.setDate(endDate.getDate() + 1);
+    } else if (period.match(/^\d+d$/)) {
+      // Handle numeric day periods (e.g., "2d", "5d")
+      const days = this.parsePeriodToDays(period);
+      const lastTradingDay = this.getLastTradingDate(now);
+      startDate = new Date(lastTradingDay);
+      startDate.setDate(startDate.getDate() - days + 1); // +1 because we want to include today
       endDate = new Date(lastTradingDay);
       endDate.setDate(endDate.getDate() + 1);
     } else {

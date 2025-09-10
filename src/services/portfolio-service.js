@@ -4,7 +4,13 @@
  * Replicates functionality from Python trading_script.py
  */
 
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  QueryCommand,
+} = require("@aws-sdk/lib-dynamodb");
 const Logger = require("../utils/logger");
 const ErrorHandler = require("../utils/error-handler");
 const Validators = require("../utils/validators");
@@ -19,9 +25,10 @@ class PortfolioService {
     this.envConfig = getEnvConfig();
 
     // Initialize DynamoDB
-    this.dynamodb = new AWS.DynamoDB.DocumentClient({
+    const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "us-east-1",
     });
+    this.dynamodb = DynamoDBDocumentClient.from(client);
 
     this.tableName =
       process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;
@@ -43,7 +50,7 @@ class PortfolioService {
         },
       };
 
-      const result = await this.dynamodb.get(params).promise();
+      const result = await this.dynamodb.send(new GetCommand(params));
 
       if (!result.Item) {
         // Initialize empty portfolio if none exists
@@ -135,7 +142,7 @@ class PortfolioService {
         },
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       const trades = result.Items.map((item) => ({
         id: item.id,
@@ -177,7 +184,7 @@ class PortfolioService {
         },
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
       this.logger.debug("Portfolio saved to DynamoDB");
     } catch (error) {
       this.logger.error("Failed to save portfolio", error);
@@ -221,7 +228,7 @@ class PortfolioService {
         Item: tradeItem,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
       this.logger.debug(`Trade saved: ${tradeId}`);
 
       return tradeId;
@@ -452,6 +459,260 @@ class PortfolioService {
     } catch (error) {
       this.logger.error("Failed to update stop losses", error);
       throw new Error(`Stop loss update error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Update portfolio positions with latest market data
+   * @param {Object} portfolio - Current portfolio
+   * @param {Object} marketData - Latest market data for positions
+   * @returns {Promise<Object>} Updated portfolio with new prices
+   */
+  async updatePortfolioPositions(portfolio, marketData) {
+    try {
+      this.logger.info("Updating portfolio positions with market data");
+
+      if (!portfolio.positions || portfolio.positions.length === 0) {
+        this.logger.info("No positions to update");
+        return portfolio;
+      }
+
+      let updatedCount = 0;
+
+      // Update each position with latest market data
+      portfolio.positions = portfolio.positions.map((position) => {
+        const tickerData = marketData[position.ticker];
+
+        if (
+          tickerData &&
+          tickerData.source !== "error" &&
+          tickerData.data &&
+          tickerData.data.length > 0
+        ) {
+          // Get the latest price from the most recent data point
+          const latestDataPoint = tickerData.data[tickerData.data.length - 1];
+          const latestPrice = latestDataPoint.close || latestDataPoint.adjClose;
+
+          if (latestPrice && !isNaN(latestPrice)) {
+            // Update current price and market value
+            position.currentPrice = latestPrice;
+            position.marketValue = position.shares * latestPrice;
+
+            // Recalculate unrealized P&L
+            position.unrealizedPnL =
+              position.marketValue - (position.costBasis || 0);
+            if (position.costBasis && position.costBasis > 0) {
+              position.unrealizedPnLPercent =
+                (position.unrealizedPnL / position.costBasis) * 100;
+            } else {
+              position.unrealizedPnLPercent = 0;
+            }
+
+            this.logger.debug(
+              `Updated ${position.ticker}: $${latestPrice.toFixed(2)}`
+            );
+            updatedCount++;
+          } else {
+            this.logger.warn(`Invalid price data for ${position.ticker}`);
+          }
+        } else {
+          this.logger.warn(`No market data available for ${position.ticker}`, {
+            source: tickerData?.source,
+            hasData: tickerData?.data?.length > 0,
+          });
+        }
+
+        return position;
+      });
+
+      this.logger.info(
+        `Updated ${updatedCount} out of ${portfolio.positions.length} positions`
+      );
+
+      // Recalculate portfolio totals
+      portfolio = this.recalculatePortfolioTotals(portfolio);
+
+      // Update last updated timestamp
+      portfolio.lastUpdated = new Date().toISOString();
+
+      // Save updated portfolio
+      await this.savePortfolio(portfolio);
+
+      this.logger.info("Portfolio positions updated successfully", {
+        positionsCount: portfolio.positions.length,
+        updatedCount,
+        totalValue: portfolio.totalValue,
+      });
+
+      return portfolio;
+    } catch (error) {
+      this.logger.error("Failed to update portfolio positions", error);
+      throw new Error(`Portfolio positions update error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Calculate performance metrics for portfolio
+   * @param {Object} portfolio - Portfolio to analyze
+   * @returns {Object} Performance metrics
+   */
+  calculatePerformanceMetrics(portfolio) {
+    try {
+      const metrics = {
+        totalValue: portfolio.totalValue,
+        cash: portfolio.cash,
+        equity: portfolio.equity,
+        positionsCount: portfolio.positions?.length || 0,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (portfolio.positions && portfolio.positions.length > 0) {
+        // Calculate position metrics
+        const positionsWithPnL = portfolio.positions.filter(
+          (p) => p.unrealizedPnL !== undefined && p.unrealizedPnL !== null
+        );
+
+        if (positionsWithPnL.length > 0) {
+          const totalPnL = positionsWithPnL.reduce(
+            (sum, pos) => sum + (pos.unrealizedPnL || 0),
+            0
+          );
+          const winningPositions = positionsWithPnL.filter(
+            (pos) => pos.unrealizedPnL > 0
+          ).length;
+          const losingPositions = positionsWithPnL.filter(
+            (pos) => pos.unrealizedPnL < 0
+          ).length;
+
+          metrics.totalUnrealizedPnL = totalPnL;
+          metrics.winningPositions = winningPositions;
+          metrics.losingPositions = losingPositions;
+          metrics.winRate = (winningPositions / positionsWithPnL.length) * 100;
+        }
+
+        // Calculate diversification metrics
+        const topPositionValue = Math.max(
+          ...portfolio.positions.map((p) => p.marketValue || 0)
+        );
+        metrics.largestPositionPercent =
+          portfolio.totalValue > 0
+            ? (topPositionValue / portfolio.totalValue) * 100
+            : 0;
+      }
+
+      return metrics;
+    } catch (error) {
+      this.logger.error("Failed to calculate performance metrics", error);
+      // Return basic metrics if calculation fails
+      return {
+        totalValue: portfolio.totalValue || 0,
+        cash: portfolio.cash || 0,
+        equity: portfolio.equity || 0,
+        positionsCount: portfolio.positions?.length || 0,
+        timestamp: new Date().toISOString(),
+        error: "Failed to calculate detailed metrics",
+      };
+    }
+  }
+
+  /**
+   * Sync local portfolio with brokerage data (Alpaca)
+   * @param {Object} localPortfolio - Current local portfolio from DynamoDB
+   * @param {Array} alpacaPositions - Positions from Alpaca API
+   * @param {Object} alpacaAccount - Account info from Alpaca API
+   * @returns {Promise<Object>} Merged portfolio with Alpaca data
+   */
+  async syncWithBrokerageData(localPortfolio, alpacaPositions, alpacaAccount) {
+    try {
+      this.logger.info("Syncing local portfolio with Alpaca data", {
+        localPositions: localPortfolio.positions?.length || 0,
+        alpacaPositions: alpacaPositions.length,
+      });
+
+      // Start with Alpaca account data as the base
+      const syncedPortfolio = {
+        totalValue: alpacaAccount.portfolioValue,
+        cash: alpacaAccount.cash,
+        equity: alpacaAccount.equity,
+        positions: [],
+        lastUpdated: new Date().toISOString(),
+      };
+
+      // Create a map of local positions for quick lookup
+      const localPositionsMap = new Map();
+      if (localPortfolio.positions) {
+        localPortfolio.positions.forEach((pos) => {
+          localPositionsMap.set(pos.ticker, pos);
+        });
+      }
+
+      // Merge Alpaca positions with local data
+      syncedPortfolio.positions = alpacaPositions.map((alpacaPos) => {
+        const localPos = localPositionsMap.get(alpacaPos.ticker);
+
+        if (localPos) {
+          // Merge: keep local cost basis and stop losses, update with Alpaca data
+          return {
+            ticker: alpacaPos.ticker,
+            shares: alpacaPos.shares,
+            // Preserve local cost basis information
+            buyPrice: localPos.buyPrice || alpacaPos.currentPrice,
+            costBasis:
+              localPos.costBasis || alpacaPos.shares * alpacaPos.currentPrice,
+            // Preserve local stop loss
+            stopLoss: localPos.stopLoss,
+            // Use Alpaca's current data
+            currentPrice: alpacaPos.currentPrice,
+            marketValue: alpacaPos.marketValue,
+            unrealizedPnL: alpacaPos.unrealizedPnL,
+            unrealizedPnLPercent: alpacaPos.unrealizedPnLPercent,
+          };
+        } else {
+          // New position from Alpaca - create with Alpaca data
+          this.logger.info(
+            `New position detected from Alpaca: ${alpacaPos.ticker}`
+          );
+          return {
+            ticker: alpacaPos.ticker,
+            shares: alpacaPos.shares,
+            buyPrice: alpacaPos.currentPrice, // Assume bought at current price
+            costBasis: alpacaPos.marketValue, // Use current market value as cost basis
+            stopLoss: null, // No stop loss set yet
+            currentPrice: alpacaPos.currentPrice,
+            marketValue: alpacaPos.marketValue,
+            unrealizedPnL: alpacaPos.unrealizedPnL,
+            unrealizedPnLPercent: alpacaPos.unrealizedPnLPercent,
+          };
+        }
+      });
+
+      // Check for positions that exist locally but not in Alpaca (sold positions)
+      if (localPortfolio.positions) {
+        const alpacaTickers = new Set(alpacaPositions.map((p) => p.ticker));
+        const missingPositions = localPortfolio.positions.filter(
+          (pos) => !alpacaTickers.has(pos.ticker)
+        );
+
+        if (missingPositions.length > 0) {
+          this.logger.warn(
+            `Positions found locally but not in Alpaca: ${missingPositions
+              .map((p) => p.ticker)
+              .join(", ")}`
+          );
+          // These will be automatically removed since we're syncing with Alpaca as source of truth
+        }
+      }
+
+      this.logger.info("Portfolio sync completed", {
+        syncedPositions: syncedPortfolio.positions.length,
+        totalValue: syncedPortfolio.totalValue,
+        cash: syncedPortfolio.cash,
+      });
+
+      return syncedPortfolio;
+    } catch (error) {
+      this.logger.error("Failed to sync portfolio with brokerage data", error);
+      throw new Error(`Portfolio sync error: ${error.message}`);
     }
   }
 

@@ -7,8 +7,8 @@ const { RETRY_CONFIG, ERROR_TYPES } = require("../config/constants");
 const Logger = require("./logger");
 
 class ErrorHandler {
-  constructor(context = "system") {
-    this.logger = new Logger(context);
+  constructor(context = "system", options = {}) {
+    this.logger = new Logger(context, { uniqueId: options.uniqueId });
   }
 
   /**

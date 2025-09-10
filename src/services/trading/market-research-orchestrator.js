@@ -1,6 +1,32 @@
 /**
  * Market Research Orchestrator
  * Shared function for both manual and scheduled market research execution
+ *
+ * TODO: Future Enhancements
+ * ========================
+ *
+ * 1. PERFORMANCE METRICS CALCULATION
+ *    - Replace hard-coded performance metrics in formatPerformanceMetrics()
+ *    - Calculate actual Sharpe/Sortino ratios from portfolio returns
+ *    - Implement real Beta and Alpha calculations vs benchmarks
+ *    - Add R² fit quality metrics from historical data
+ *
+ * 2. REAL-TIME PORTFOLIO CONTEXT
+ *    - Add current portfolio performance summary to research prompt
+ *    - Include recent trading performance (win rate, avg gain/loss)
+ *    - Show current sector allocation and diversification metrics
+ *    - Add portfolio risk metrics (VaR, max drawdown)
+ *
+ * 3. CITATION HANDLING IMPROVEMENTS
+ *    - Add fallback guidance for company evaluations with limited sources
+ *    - Implement citation quality scoring and validation
+ *    - Handle cases where required citations aren't available
+ *    - Add citation freshness checks (prefer recent sources)
+ *
+ * 4. DATE CONSISTENCY IMPROVEMENTS
+ *    - Ensure consistent date formatting throughout research process
+ *    - Use trading date for all timestamps in research output
+ *    - Align JSON schema generatedAt with actual research execution time
  */
 
 const AIService = require("../ai-service");
@@ -63,6 +89,8 @@ async function performMarketResearch(options = {}) {
       marketData,
       aiContext
     );
+
+    logInstance.debug(`🔍 RESEARCH PROMPT: ${researchPrompt}`);
 
     // Call AI for research-only response
     const researchResponse = await aiService.callOpenAI(researchPrompt, true); // true for research

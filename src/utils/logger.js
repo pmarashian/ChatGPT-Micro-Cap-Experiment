@@ -3,6 +3,8 @@
  * Uses manual HTTP POST to send logs to configured endpoint
  */
 
+const { isOffline } = require("./environment");
+
 // Log batching setup
 let logQueue = [];
 let flushTimeout = null;
@@ -14,20 +16,14 @@ const MAX_QUEUE_SIZE = 1000; // Prevent memory issues
 let loggingEndpoint = null; //process.env.LOGGING_ENDPOINT;
 const loggingTimeout = Number(process.env.LOGGING_TIMEOUT_MS || 5000); // Increased default timeout
 
-// Detect offline mode more reliably
-const isOffline =
-  process.env.IS_OFFLINE === "true" ||
-  process.env.SERVERLESS_OFFLINE_HTTP_PORT ||
-  !process.env.AWS_LAMBDA_FUNCTION_NAME;
-
 // For offline development, use serverless-offline endpoint
-if (isOffline) {
+if (isOffline()) {
   const port = process.env.SERVERLESS_OFFLINE_HTTP_PORT || 3000; // Updated to match serverless.yml
   loggingEndpoint = `http://localhost:${port}/api/logs`;
 }
 
 // For AWS deployment, use the deployed API Gateway URL
-if (!loggingEndpoint && !isOffline) {
+if (!loggingEndpoint && !isOffline()) {
   const apiGatewayUrl = process.env.API_GATEWAY_URL;
 
   if (apiGatewayUrl) {
@@ -37,18 +33,33 @@ if (!loggingEndpoint && !isOffline) {
 }
 
 // Flush logs to endpoint
-async function flushLogs() {
+async function flushLogs(options = {}) {
   if (logQueue.length === 0) return;
 
   const logsToSend = [...logQueue];
   logQueue = [];
 
+  if (isOffline()) {
+    logsToSend.forEach((log) => {
+      const uniqueIdStr = log.uniqueId ? `[${log.uniqueId}] ` : "[UNDEFINED]";
+      console.log(
+        `${uniqueIdStr}[${log.level.toUpperCase()}] [${log.context}] ${
+          log.message
+        }`
+      );
+    });
+    return;
+  }
+
   try {
     if (!loggingEndpoint) {
       // Fallback to console if no endpoint configured
-      logsToSend.forEach((log) =>
-        console.log(`[${log.level.toUpperCase()}]`, log.message, log)
-      );
+      logsToSend.forEach((log) => {
+        const uniqueIdStr = log.uniqueId ? `[${log.uniqueId}] ` : "";
+        console.log(
+          `${uniqueIdStr}[${log.level.toUpperCase()}] ${log.message}`
+        );
+      });
       return;
     }
 
@@ -92,26 +103,31 @@ function scheduleFlush() {
 }
 
 // Force flush remaining logs
-async function forceFlushLogs() {
+async function forceFlushLogs(options = {}) {
   if (flushTimeout) {
     clearTimeout(flushTimeout);
     flushTimeout = null;
   }
-  await flushLogs();
+  await flushLogs({ ...options });
 }
 
 // Create logger factory function
-function createLogger(context = "system") {
+function createLogger(context = "system", options = {}) {
+  const loggerOptions = { uniqueId: options?.uniqueId, context };
+
   return new Proxy(
     {
+      // Store options for use in proxy handler
+      _options: loggerOptions,
+
       // Expose flush method for manual flushing
       async flush() {
-        await forceFlushLogs();
+        await forceFlushLogs(loggerOptions);
       },
 
       // Lambda-specific logging methods
       logLambdaStart(event, awsContext) {
-        this.debug("Lambda function started", {
+        this.verbose("Lambda function started", {
           requestId: awsContext.awsRequestId,
           functionName: awsContext.functionName,
           event: JSON.stringify(event),
@@ -119,7 +135,7 @@ function createLogger(context = "system") {
       },
 
       logLambdaEnd(duration, success = true) {
-        this.debug(`Lambda function ${success ? "completed" : "failed"}`, {
+        this.verbose(`Lambda function ${success ? "completed" : "failed"}`, {
           duration: `${duration}ms`,
           success,
         });
@@ -127,7 +143,7 @@ function createLogger(context = "system") {
 
       // Business logic logging methods
       logTradeDecision(decision) {
-        this.info("AI trade decision made", {
+        this.debug("AI trade decision made", {
           ticker: decision.ticker,
           action: decision.action,
           shares: decision.shares,
@@ -178,12 +194,13 @@ function createLogger(context = "system") {
           const additionalData =
             customFields.length > 0 ? Object.assign({}, ...customFields) : {};
 
-          // Create log entry
+          // Create log entry with uniqueId from logger options
           const logEntry = {
             dt: new Date().toISOString(),
             level: prop,
             message,
-            context,
+            context: loggerOptions.context,
+            uniqueId: loggerOptions.uniqueId,
             ...additionalData,
           };
 
@@ -199,7 +216,7 @@ function createLogger(context = "system") {
               clearTimeout(flushTimeout);
               flushTimeout = null;
             }
-            flushLogs();
+            flushLogs(loggerOptions);
           } else {
             scheduleFlush();
           }
@@ -208,8 +225,11 @@ function createLogger(context = "system") {
           if (process.env.NODE_ENV === "development" || !loggingEndpoint) {
             const consoleMethod =
               prop === "error" ? "error" : prop === "warn" ? "warn" : "log";
+            const uniqueIdStr = loggerOptions.uniqueId
+              ? `[${loggerOptions.uniqueId}] `
+              : "";
             console[consoleMethod](
-              `[${prop.toUpperCase()}] [${context}] ${message}`,
+              `${uniqueIdStr}[${prop.toUpperCase()}] ${message}`,
               Object.keys(additionalData).length > 0 ? additionalData : ""
             );
           }
@@ -220,12 +240,13 @@ function createLogger(context = "system") {
 }
 
 // Create backward-compatible Logger class/function hybrid
-function Logger(context = "system") {
+function Logger(context = "system", options = {}) {
   // Support both new Logger() and Logger() patterns
+
   if (new.target) {
-    return createLogger(context);
+    return createLogger(context, options);
   }
-  return createLogger(context);
+  return createLogger(context, options);
 }
 
 // Add static methods for direct access

@@ -17,7 +17,7 @@ const {
  * Pure business logic for discovery ingestion
  * No orchestration concerns - just the core functionality
  */
-const businessLogic = async ({ logger, errorHandler, event, context }) => {
+const businessLogic = async ({ logger, errorHandler }) => {
   // Execute discovery ingestion using shared orchestrator
   const results = await performDiscoveryIngestion({
     invocationType: "scheduled",

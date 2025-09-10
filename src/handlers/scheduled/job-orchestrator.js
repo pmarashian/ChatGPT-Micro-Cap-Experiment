@@ -14,7 +14,7 @@ const {
 } = require("../../utils/lambda-client");
 const {
   getJobsToRun,
-  updateJobStatus,
+  tryMarkJobRunning,
   handleTimedOutJobs,
   acquireOrchestratorLock,
   deleteOrchestratorLock,
@@ -25,35 +25,50 @@ const {
 /**
  * Generate unique execution ID for tracking
  */
-function generateExecutionId() {
-  return `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+function generateExecutionId(uniqueId) {
+  if (uniqueId) return uniqueId;
+
+  // Generate a more unique ID using crypto if available, otherwise fallback to random
+  let randomPart;
+  try {
+    // Use crypto.randomBytes for better uniqueness if available
+    const crypto = require("crypto");
+    randomPart = crypto.randomBytes(4).toString("hex");
+  } catch (error) {
+    // Fallback to Math.random
+    randomPart =
+      Math.random().toString(36).substr(2, 9) +
+      Math.random().toString(36).substr(2, 9);
+  }
+
+  return `exec_${Date.now()}_${randomPart}`;
 }
 
 /**
  * Pure business logic for job orchestration
  * Runs every minute to coordinate job execution
  */
-const businessLogic = async ({ logger, errorHandler }) => {
-  const executionId = generateExecutionId();
-
-  logger.debug("Starting job orchestration cycle", { executionId });
+const businessLogic = async ({ logger, errorHandler, uniqueId }) => {
+  const executionId = generateExecutionId(uniqueId);
 
   try {
     // 1. Check if orchestration is enabled
     const orchestrationEnabled = await isOrchestrationEnabled(logger);
 
     if (!orchestrationEnabled) {
-      logger.debug("Orchestration is disabled, skipping this cycle", {
+      logger.verbose("Orchestration is disabled, skipping this cycle", {
         executionId,
       });
       return null;
     }
 
+    logger.verbose("Starting job orchestration cycle", { executionId });
+
     // 2. Try to acquire orchestrator lock to prevent concurrent execution
-    const lockResult = await acquireOrchestratorLock(logger);
+    const lockResult = await acquireOrchestratorLock({ logger, executionId });
 
     if (!lockResult.success) {
-      logger.debug(
+      logger.verbose(
         "Another orchestrator instance is already running, skipping this cycle",
         {
           executionId,
@@ -62,24 +77,63 @@ const businessLogic = async ({ logger, errorHandler }) => {
       return null;
     }
 
-    const orchestratorExecutionId = lockResult.executionId;
+    const orchestratorExecutionId = executionId;
 
     try {
       // 2. Handle any timed-out jobs from previous runs
-      await handleTimedOutJobs(logger);
+      try {
+        await handleTimedOutJobs(logger);
+      } catch (error) {
+        if (
+          error.name === "ResourceNotFoundException" ||
+          error.code === "ResourceNotFoundException"
+        ) {
+          logger.debug(
+            "DynamoDB table not found for timeout handling (development mode)",
+            {
+              executionId,
+            }
+          );
+          // Continue - timeout handling is not critical
+        } else {
+          logger.warn("Failed to handle timed-out jobs", {
+            executionId,
+            error: error.message,
+          });
+          // Continue - timeout handling failure shouldn't stop orchestration
+        }
+      }
 
       // 3. Get jobs that need to run (excludes running jobs)
-      const jobsToRun = await getJobsToRun(logger);
+      let jobsToRun;
+      try {
+        jobsToRun = await getJobsToRun(logger);
+      } catch (error) {
+        if (
+          error.name === "ResourceNotFoundException" ||
+          error.code === "ResourceNotFoundException"
+        ) {
+          logger.warn(
+            "DynamoDB table not found, no jobs to run (development mode)",
+            {
+              executionId,
+              orchestratorExecutionId,
+            }
+          );
+          return null;
+        }
+        throw error; // Re-throw other errors
+      }
 
       if (jobsToRun.length === 0) {
-        logger.debug("No jobs to run this cycle", {
+        logger.verbose("No jobs to run this cycle", {
           executionId,
           orchestratorExecutionId,
         });
         return null;
       }
 
-      logger.debug(`Found ${jobsToRun.length} jobs to run`, {
+      logger.verbose(`Found ${jobsToRun.length} jobs to run`, {
         executionId,
         orchestratorExecutionId,
         jobs: jobsToRun.map((j) => j.jobName),
@@ -89,28 +143,41 @@ const businessLogic = async ({ logger, errorHandler }) => {
       const maxConcurrency = parseInt(process.env.MAX_JOB_CONCURRENCY || "1");
       const executionPromises = [];
 
+      logger.verbose(
+        `Executing ${jobsToRun.length} jobs in parallel: ${maxConcurrency}`
+      );
+
       for (let i = 0; i < Math.min(jobsToRun.length, maxConcurrency); i++) {
         const job = jobsToRun[i];
-        console.log("--------------------------------");
-        console.log("Executing job", job.jobName);
-        console.log("--------------------------------");
         executionPromises.push(
           executeJob(job, orchestratorExecutionId, logger)
         );
       }
 
-      // Wait for all job invocations to complete
+      logger.verbose(
+        `Waiting for ${executionPromises.length} jobs to complete`
+      );
+
+      // // Wait for all job invocations to complete
       const results = await Promise.allSettled(executionPromises);
+
+      // const result = await executeJob(
+      //   jobsToRun[0],
+      //   orchestratorExecutionId,
+      //   logger
+      // );
+
+      // const results = [result];
 
       // Log results
       const successful = results.filter((r) => r.status === "fulfilled").length;
       const failed = results.filter((r) => r.status === "rejected").length;
 
-      logger.info("Job orchestration cycle completed", {
+      logger.verbose("Job orchestration cycle completed", {
         executionId,
         orchestratorExecutionId,
         totalJobs: jobsToRun.length,
-        executedJobs: executionPromises.length,
+        executedJobs: 1,
         successful,
         failed,
       });
@@ -130,7 +197,7 @@ const businessLogic = async ({ logger, errorHandler }) => {
  * Execute a single job
  */
 async function executeJob(job, orchestrationExecutionId, logger) {
-  const jobExecutionId = generateExecutionId();
+  const jobExecutionId = generateExecutionId(orchestrationExecutionId); // Generate unique ID for this job execution
   const jobName = job.jobName;
 
   logger.debug(`Starting job execution`, {
@@ -141,9 +208,19 @@ async function executeJob(job, orchestrationExecutionId, logger) {
   });
 
   try {
-    // 1. Mark job as running (worker will handle completion status)
-    console.log("Marking job as running", jobName);
-    await updateJobStatus(jobName, "running", jobExecutionId);
+    // 1. Try to mark job as running with conditional update (prevents race conditions)
+
+    const markResult = await tryMarkJobRunning(jobName, jobExecutionId, logger);
+
+    if (!markResult.success) {
+      logger.info(`Job already running, skipping execution`, {
+        jobName,
+        jobExecutionId,
+        orchestrationExecutionId,
+        reason: markResult.reason,
+      });
+      return null; // Skip this job execution
+    }
 
     // 2. Create Lambda client
     const lambda = createLambdaClient();
@@ -164,11 +241,14 @@ async function executeJob(job, orchestrationExecutionId, logger) {
     };
 
     // 4. Invoke the worker Lambda function synchronously
-    console.log("Invoking worker function synchronously", job.targetFunction);
-    logger.debug(`Invoking worker function synchronously`, {
+    // console.log("Invoking worker function synchronously", job.targetFunction);
+    logger.info(`🔥 CRITICAL: Orchestrator invoking worker function`, {
       jobName,
       targetFunction: job.targetFunction,
       jobExecutionId,
+      orchestrationExecutionId,
+      timestamp: new Date().toISOString(),
+      payload: JSON.stringify(payload),
     });
 
     const result = await invokeLambdaFunctionSync(
@@ -177,9 +257,13 @@ async function executeJob(job, orchestrationExecutionId, logger) {
       lambda
     );
 
-    console.log("Worker function completed", job.targetFunction, {
+    logger.info(`✅ Worker function invocation completed`, {
+      jobName,
+      targetFunction: job.targetFunction,
+      jobExecutionId,
+      orchestrationExecutionId,
       statusCode: result.StatusCode,
-      hasOrchestrationInfo: !!result.payload?._orchestration,
+      hasPayload: !!result.payload,
     });
 
     logger.debug(`Worker function completed`, {
@@ -190,9 +274,9 @@ async function executeJob(job, orchestrationExecutionId, logger) {
     });
 
     // 5. Handle job completion centrally
-    if (result.StatusCode === 200 && result.payload?._orchestration) {
+    if (result.statusCode === 200 && result._orchestration) {
       // Worker completed successfully with orchestration info
-      const orchInfo = result.payload._orchestration;
+      const orchInfo = result._orchestration;
       await completeJobExecution(jobName, jobExecutionId, true, null, logger);
 
       logger.info(`Job completed successfully via centralized orchestration`, {
@@ -207,9 +291,9 @@ async function executeJob(job, orchestrationExecutionId, logger) {
         status: "completed",
         executionId: jobExecutionId,
       };
-    } else if (result.payload?._orchestration?.status === "failed") {
+    } else if (result?._orchestration?.status === "failed") {
       // Worker failed with orchestration info
-      const orchInfo = result.payload._orchestration;
+      const orchInfo = result._orchestration;
       const workerError = new Error(
         orchInfo.originalError || "Worker reported failure"
       );

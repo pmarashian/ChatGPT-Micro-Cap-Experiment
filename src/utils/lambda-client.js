@@ -3,20 +3,19 @@
  * Centralized AWS Lambda client creation for trigger handlers
  */
 
-const AWS = require("aws-sdk");
+const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
+const { isOffline } = require("./environment");
 
 /**
  * Create and return AWS Lambda client with proper configuration
- * @returns {AWS.Lambda} Configured Lambda client
+ * @returns {LambdaClient} Configured Lambda client
  */
 function createLambdaClient() {
-  return new AWS.Lambda({
-    apiVersion: "2015-03-31",
+  return new LambdaClient({
     region: process.env.AWS_REGION || "us-east-1",
-    endpoint:
-      process.env.IS_OFFLINE === "true"
-        ? "http://localhost:3002" // serverless-offline Lambda port (matches serverless.yml)
-        : "https://lambda.us-east-1.amazonaws.com",
+    endpoint: isOffline()
+      ? "http://localhost:3002" // serverless-offline Lambda port (matches serverless.yml)
+      : "https://lambda.us-east-1.amazonaws.com",
   });
 }
 
@@ -24,7 +23,7 @@ function createLambdaClient() {
  * Invoke a Lambda function asynchronously (for manual/API triggers)
  * @param {string} functionName - Name of the function to invoke
  * @param {Object} payload - Payload to send to the function
- * @param {AWS.Lambda} lambdaClient - Lambda client instance (optional)
+ * @param {LambdaClient} lambdaClient - Lambda client instance (optional)
  * @returns {Promise<Object>} Lambda invocation result
  */
 async function invokeLambdaFunction(
@@ -34,7 +33,7 @@ async function invokeLambdaFunction(
 ) {
   const client = lambdaClient || createLambdaClient();
 
-  const params = {
+  const command = new InvokeCommand({
     FunctionName: functionName,
     InvocationType: "Event", // Asynchronous invocation
     Payload: JSON.stringify({
@@ -43,9 +42,9 @@ async function invokeLambdaFunction(
       timestamp: new Date().toISOString(),
       ...payload,
     }),
-  };
+  });
 
-  return await client.invoke(params).promise();
+  return await client.send(command);
 }
 
 /**
@@ -53,7 +52,7 @@ async function invokeLambdaFunction(
  * Waits for completion and returns the result
  * @param {string} functionName - Name of the function to invoke
  * @param {Object} payload - Payload to send to the function
- * @param {AWS.Lambda} lambdaClient - Lambda client instance (optional)
+ * @param {LambdaClient} lambdaClient - Lambda client instance (optional)
  * @returns {Promise<Object>} Lambda invocation result with payload
  */
 async function invokeLambdaFunctionSync(
@@ -63,25 +62,36 @@ async function invokeLambdaFunctionSync(
 ) {
   const client = lambdaClient || createLambdaClient();
 
-  const params = {
+  const command = new InvokeCommand({
     FunctionName: functionName,
     InvocationType: "RequestResponse", // Synchronous invocation
     Payload: JSON.stringify(payload),
-  };
+  });
 
-  const result = await client.invoke(params).promise();
+  const result = await client.send(command);
 
-  // Parse the response payload
+  // Parse the response payload (SDK v3 returns Uint8Array)
   let responsePayload;
+
   try {
-    responsePayload = JSON.parse(result.Payload);
+    const payloadString = new TextDecoder().decode(result.Payload);
+    responsePayload = JSON.parse(payloadString);
   } catch (parseError) {
-    responsePayload = result.Payload;
+    responsePayload =
+      result.Payload && typeof result.Payload === "object"
+        ? result.Payload
+        : {};
   }
 
   return {
-    ...result,
-    payload: responsePayload,
+    // Include Lambda invocation metadata
+    StatusCode: result.StatusCode,
+    ExecutedVersion: result.ExecutedVersion,
+    FunctionError: result.FunctionError,
+    LogResult: result.LogResult,
+
+    // Include the parsed payload data
+    ...responsePayload,
   };
 }
 

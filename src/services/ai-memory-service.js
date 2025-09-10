@@ -4,7 +4,15 @@
  * Provides memory/context for AI to learn from previous decisions
  */
 
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  QueryCommand,
+  ScanCommand,
+  UpdateCommand,
+} = require("@aws-sdk/lib-dynamodb");
 const Logger = require("../utils/logger");
 const ErrorHandler = require("../utils/error-handler");
 const {
@@ -22,12 +30,16 @@ class AIMemoryService {
     this.envConfig = getEnvConfig();
 
     // Initialize DynamoDB
-    this.dynamodb = new AWS.DynamoDB.DocumentClient({
+    const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "us-east-1",
     });
+    this.dynamodb = DynamoDBDocumentClient.from(client);
 
     this.tableName =
       process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;
+
+    // Store region for debugging (in case config is not accessible)
+    this.region = process.env.AWS_REGION || "us-east-1";
   }
 
   /**
@@ -62,12 +74,15 @@ class AIMemoryService {
           PORTFOLIO_CONFIG.RESEARCH.RETENTION_DAYS.RESEARCH * 24 * 60 * 60,
       };
 
+      // Clean undefined values before saving to DynamoDB
+      const cleanedResearchItem = this.cleanUndefinedValues(researchItem);
+
       const params = {
         TableName: this.tableName,
-        Item: researchItem,
+        Item: cleanedResearchItem,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
 
       // Save individual ticker research items for queryability
       if (
@@ -121,12 +136,15 @@ class AIMemoryService {
           PORTFOLIO_CONFIG.RESEARCH.RETENTION_DAYS.DECISIONS * 24 * 60 * 60,
       };
 
+      // Clean undefined values before saving to DynamoDB
+      const cleanedDecisionItem = this.cleanUndefinedValues(decisionItem);
+
       const params = {
         TableName: this.tableName,
-        Item: decisionItem,
+        Item: cleanedDecisionItem,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
 
       // Save individual ticker decision items for queryability
       if (decisionData.decisions && decisionData.decisions.length > 0) {
@@ -179,7 +197,7 @@ class AIMemoryService {
         Item: marketDataItem,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
 
       // Save individual ticker market data items for queryability
       await this.saveTickerMarketDataItems(marketData);
@@ -233,12 +251,15 @@ class AIMemoryService {
             PORTFOLIO_CONFIG.RESEARCH.RETENTION_DAYS.RESEARCH * 24 * 60 * 60,
         };
 
+        // Clean undefined values before saving to DynamoDB
+        const cleanedResearchItem = this.cleanUndefinedValues(researchItem);
+
         const params = {
           TableName: this.tableName,
-          Item: researchItem,
+          Item: cleanedResearchItem,
         };
 
-        return this.dynamodb.put(params).promise();
+        return this.dynamodb.send(new PutCommand(params));
       });
 
       await Promise.all(promises);
@@ -284,12 +305,15 @@ class AIMemoryService {
             PORTFOLIO_CONFIG.RESEARCH.RETENTION_DAYS.DECISIONS * 24 * 60 * 60,
         };
 
+        // Clean undefined values before saving to DynamoDB
+        const cleanedDecisionItem = this.cleanUndefinedValues(decisionItem);
+
         const params = {
           TableName: this.tableName,
-          Item: decisionItem,
+          Item: cleanedDecisionItem,
         };
 
-        return this.dynamodb.put(params).promise();
+        return this.dynamodb.send(new PutCommand(params));
       });
 
       await Promise.all(promises);
@@ -335,7 +359,7 @@ class AIMemoryService {
           Item: marketDataItem,
         };
 
-        return this.dynamodb.put(params).promise();
+        return this.dynamodb.send(new PutCommand(params));
       });
 
       await Promise.all(promises);
@@ -352,7 +376,7 @@ class AIMemoryService {
    * Get recent AI research history
    * @param {number} limit - Number of research items to retrieve
    */
-  async getRecentResearch(limit = 5) {
+  async getRecentResearch(limit = 10) {
     try {
       const params = {
         TableName: this.tableName,
@@ -363,11 +387,12 @@ class AIMemoryService {
           ":gsi1pk": "SUMMARY",
           ":pkPrefix": `${ITEM_TYPES.AI_RESEARCH}#SUMMARY`,
         },
-        // Note: ScanIndexForward removed - query returns items in index order
+        // Sort by timestamp in descending order (most recent first)
+        ScanIndexForward: false,
         Limit: limit,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       this.logger.debug(
         `Retrieved ${result.Items.length} research summary items`
@@ -383,7 +408,7 @@ class AIMemoryService {
    * Get recent AI decision history
    * @param {number} limit - Number of decision items to retrieve
    */
-  async getRecentDecisions(limit = 10) {
+  async getRecentDecisions(limit = 15) {
     try {
       const params = {
         TableName: this.tableName,
@@ -394,11 +419,12 @@ class AIMemoryService {
           ":gsi1pk": "SUMMARY",
           ":pkPrefix": `${ITEM_TYPES.AI_DECISION}#SUMMARY`,
         },
-        // Note: ScanIndexForward removed - query returns items in index order
+        // Sort by timestamp in descending order (most recent first)
+        ScanIndexForward: false,
         Limit: limit,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       this.logger.debug(
         `Retrieved ${result.Items.length} decision summary items`
@@ -428,7 +454,7 @@ class AIMemoryService {
         Limit: 1,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       if (result.Items && result.Items.length > 0) {
         const item = result.Items[0];
@@ -467,7 +493,7 @@ class AIMemoryService {
         },
       };
 
-      const result = await this.dynamodb.get(params).promise();
+      const result = await this.dynamodb.send(new GetCommand(params));
 
       if (result.Item) {
         this.logger.debug("Retrieved portfolio configuration from database");
@@ -507,7 +533,7 @@ class AIMemoryService {
         Item: configItem,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
       this.logger.info("Portfolio configuration saved");
 
       return configItem;
@@ -553,10 +579,15 @@ class AIMemoryService {
         outcome: null, // 'success', 'failure', 'holding'
       }));
 
+      // Clean undefined values from scored discoveries
+      const cleanedScoredDiscoveries = scoredDiscoveries.map((discovery) =>
+        this.cleanUndefinedValues(discovery)
+      );
+
       // Merge with existing discoveries
       const mergedDiscoveries = this.mergeDiscoveryLists(
         existingDiscoveries,
-        scoredDiscoveries
+        cleanedScoredDiscoveries
       );
 
       const discoveryItem = {
@@ -569,28 +600,31 @@ class AIMemoryService {
         discoveredTickers: mergedDiscoveries,
         lastUpdated: new Date().toISOString(),
         totalDiscoveries: mergedDiscoveries.length,
-        recentAdditions: scoredDiscoveries.length,
+        recentAdditions: cleanedScoredDiscoveries.length,
         averageQualityScore:
           this.calculateAverageQualityScore(mergedDiscoveries),
         topPerformers: this.getTopPerformers(mergedDiscoveries),
       };
 
+      // Clean the entire discovery item before saving to DynamoDB
+      const cleanedDiscoveryItem = this.cleanUndefinedValues(discoveryItem);
+
       const params = {
         TableName: this.tableName,
-        Item: discoveryItem,
+        Item: cleanedDiscoveryItem,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
       this.logger.info(
-        `Saved ${scoredDiscoveries.length} new discoveries with quality scores`,
+        `Saved ${cleanedScoredDiscoveries.length} new discoveries with quality scores`,
         {
-          newDiscoveries: scoredDiscoveries.length,
-          averageQualityScore: discoveryItem.averageQualityScore,
+          newDiscoveries: cleanedScoredDiscoveries.length,
+          averageQualityScore: cleanedDiscoveryItem.averageQualityScore,
           totalDiscoveries: mergedDiscoveries.length,
         }
       );
 
-      return discoveryItem;
+      return cleanedDiscoveryItem;
     } catch (error) {
       this.logger.error(
         "Failed to save discovered tickers with quality",
@@ -682,6 +716,36 @@ class AIMemoryService {
   }
 
   /**
+   * Clean undefined values from objects and arrays (required for DynamoDB)
+   * @param {any} value - Value to clean
+   * @returns {any} Cleaned value with undefined values removed
+   */
+  cleanUndefinedValues(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => this.cleanUndefinedValues(item))
+        .filter((item) => item !== null && item !== undefined);
+    }
+
+    if (typeof value === "object") {
+      const cleaned = {};
+      for (const [key, val] of Object.entries(value)) {
+        const cleanedVal = this.cleanUndefinedValues(val);
+        if (cleanedVal !== null && cleanedVal !== undefined) {
+          cleaned[key] = cleanedVal;
+        }
+      }
+      return cleaned;
+    }
+
+    return value;
+  }
+
+  /**
    * Update investment performance for a ticker
    * @param {string} ticker - Ticker symbol
    * @param {Object} performanceData - Performance metrics
@@ -735,7 +799,7 @@ class AIMemoryService {
           Item: discoveryItem,
         };
 
-        await this.dynamodb.put(params).promise();
+        await this.dynamodb.send(new PutCommand(params));
         this.logger.info(`Updated performance for ${ticker}`, {
           ticker,
           performance: performanceData.performance,
@@ -781,7 +845,7 @@ class AIMemoryService {
         },
       };
 
-      const result = await this.dynamodb.get(params).promise();
+      const result = await this.dynamodb.send(new GetCommand(params));
 
       if (result.Item && result.Item.discoveredTickers) {
         this.logger.debug(
@@ -838,7 +902,7 @@ class AIMemoryService {
         Limit: limit,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       this.logger.debug(
         `Retrieved ${result.Items.length} research items for ${ticker}`
@@ -869,7 +933,7 @@ class AIMemoryService {
         Limit: limit,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       this.logger.debug(
         `Retrieved ${result.Items.length} decision items for ${ticker}`
@@ -900,7 +964,7 @@ class AIMemoryService {
         Limit: limit,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       this.logger.debug(
         `Retrieved ${result.Items.length} market data items for ${ticker}`
@@ -933,7 +997,7 @@ class AIMemoryService {
         Limit: limit,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       this.logger.debug(
         `Retrieved ${result.Items.length} trade items for ${ticker}`
@@ -1040,7 +1104,7 @@ class AIMemoryService {
         Item: item,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
 
       this.logger.debug(`Saved ${evidenceData.type} evidence for ${ticker}`);
       return item;
@@ -1073,7 +1137,7 @@ class AIMemoryService {
 
       // console.log("params", params);
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       // console.log("result", result);
 
@@ -1248,11 +1312,14 @@ class AIMemoryService {
         },
       };
 
-      await this.dynamodb.put(params).promise();
-      this.logger.info("Saved ranked universe snapshot", {
-        snapshotId: snapshot.id,
-        totalTickers: snapshot.totalTickers,
-      });
+      await this.dynamodb.send(new PutCommand(params));
+      this.logger.verbose(
+        `Saved ranked universe snapshot: ${snapshot.id} (${
+          snapshot.totalTickers
+        } tickers) - Table: ${this.tableName} Region: ${
+          this.dynamodb?.config?.region || this.region || "unknown"
+        } PK: ${params.Item.PK} SK: ${params.Item.SK}`
+      );
     } catch (error) {
       this.logger.error("Failed to save ranked universe snapshot", error);
       throw error;
@@ -1265,33 +1332,68 @@ class AIMemoryService {
    */
   async getLatestRankedUniverse() {
     try {
-      // Scan for ranked universe items - we'll sort them manually to get the most recent
-      const params = {
-        TableName: this.tableName,
-        FilterExpression: "PK = :pk",
-        ExpressionAttributeValues: {
-          ":pk": "ranked_universe",
-        },
-      };
+      // Try multiple approaches to ensure we get the latest data
+      let result = null;
 
-      const result = await this.dynamodb.scan(params).promise();
+      // Approach 1: Try query first (more consistent than scan)
+      try {
+        const queryParams = {
+          TableName: this.tableName,
+          KeyConditionExpression: "PK = :pk",
+          ExpressionAttributeValues: {
+            ":pk": "ranked_universe",
+          },
+          ScanIndexForward: false, // Sort by SK descending (most recent first)
+          Limit: 1, // Get only the most recent
+        };
+
+        const queryResult = await this.dynamodb.send(
+          new QueryCommand(queryParams)
+        );
+        if (queryResult.Items && queryResult.Items.length > 0) {
+          result = queryResult;
+        } else {
+          this.logger.debug(
+            `Query returned no items - Table: ${this.tableName} Region: ${
+              this.dynamodb?.config?.region || this.region || "unknown"
+            } Searched PK: ranked_universe`
+          );
+        }
+      } catch (queryError) {
+        this.logger.debug(
+          "Query failed, falling back to scan",
+          queryError.message
+        );
+      }
+
+      // Approach 2: Fallback to scan if query failed
+      if (!result || !result.Items || result.Items.length === 0) {
+        const scanParams = {
+          TableName: this.tableName,
+          FilterExpression: "PK = :pk",
+          ExpressionAttributeValues: {
+            ":pk": "ranked_universe",
+          },
+        };
+
+        result = await this.dynamodb.send(new ScanCommand(scanParams));
+      }
 
       if (result.Items && result.Items.length > 0) {
-        // Sort by date to get the most recent snapshot
+        // Sort by date to ensure we get the most recent snapshot
         const sortedItems = result.Items.sort(
           (a, b) => new Date(b.date) - new Date(a.date)
         );
         const snapshot = sortedItems[0];
 
-        this.logger.debug("Retrieved latest ranked universe", {
-          snapshotId: snapshot.snapshotId,
-          date: snapshot.date,
-          totalTickers: snapshot.totalTickers,
-        });
         return snapshot;
       }
 
-      this.logger.debug("No ranked universe snapshot found");
+      this.logger.debug(
+        `No ranked universe snapshot found - Table: ${this.tableName} Region: ${
+          this.dynamodb?.config?.region || this.region || "unknown"
+        } Searched PK: ranked_universe`
+      );
       return null;
     } catch (error) {
       this.logger.error("Failed to get latest ranked universe", error);
@@ -1302,33 +1404,65 @@ class AIMemoryService {
   /**
    * Get top N tickers from latest ranked universe
    * @param {number} limit - Maximum number of tickers to return
+   * @param {number} maxRetries - Maximum number of retries for eventual consistency
    * @returns {Promise<Array>} Array of top ticker symbols
    */
-  async getTopRankedTickers(limit = 50) {
-    try {
-      const snapshot = await this.getLatestRankedUniverse();
-      if (!snapshot || !snapshot.scores) {
-        this.logger.debug(
-          "No ranked universe available, returning empty array"
+  async getTopRankedTickers(limit = 50, maxRetries = 3) {
+    let attempt = 0;
+
+    while (attempt < maxRetries) {
+      try {
+        const snapshot = await this.getLatestRankedUniverse();
+
+        if (snapshot && snapshot.scores) {
+          const topTickers = snapshot.scores
+            .slice(0, limit)
+            .map((score) => score.ticker);
+
+          this.logger.debug(
+            `Retrieved ${
+              topTickers.length
+            } top-ranked tickers (limit: ${limit}) - Snapshot: ${
+              snapshot.snapshotId
+            } Top Score: ${snapshot.scores[0]?.compositeScore || 0} Attempt: ${
+              attempt + 1
+            }`
+          );
+
+          return topTickers;
+        }
+
+        // If no snapshot found, wait a bit and retry (eventual consistency)
+        if (attempt < maxRetries - 1) {
+          this.logger.debug(
+            `No ranked universe available on attempt ${
+              attempt + 1
+            }, retrying in 2 seconds...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+
+        attempt++;
+      } catch (error) {
+        this.logger.error(
+          `Failed to get top ranked tickers on attempt ${attempt + 1}`,
+          error
         );
-        return [];
+        if (attempt < maxRetries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        attempt++;
       }
-
-      const topTickers = snapshot.scores
-        .slice(0, limit)
-        .map((score) => score.ticker);
-
-      this.logger.debug(`Retrieved ${topTickers.length} top-ranked tickers`, {
-        limit,
-        snapshotId: snapshot.snapshotId,
-        topScore: snapshot.scores[0]?.compositeScore || 0,
-      });
-
-      return topTickers;
-    } catch (error) {
-      this.logger.error("Failed to get top ranked tickers", error);
-      return [];
     }
+
+    this.logger.debug(
+      `No ranked universe available after ${maxRetries} retries, returning empty array - Table: ${
+        this.tableName
+      } Region: ${
+        this.dynamodb?.config?.region || this.region || "unknown"
+      } Searched PK: ranked_universe`
+    );
+    return [];
   }
 
   /**
@@ -1337,8 +1471,8 @@ class AIMemoryService {
    */
   async buildAIContext() {
     try {
-      const recentResearch = await this.getRecentResearch(3);
-      const recentDecisions = await this.getRecentDecisions(5);
+      const recentResearch = await this.getRecentResearch(10);
+      const recentDecisions = await this.getRecentDecisions(15);
 
       let context = "";
 
@@ -1384,39 +1518,49 @@ class AIMemoryService {
         });
       }
 
-      // Add quality and performance summary if we have discoveries
+      // Add quality and performance summary
       try {
         const allDiscoveries = await this.getDiscoveredTickersWithQuality();
 
-        if (allDiscoveries.length > 0) {
-          const investedDiscoveries = allDiscoveries.filter((d) => d.invested);
-          const successfulInvestments = allDiscoveries.filter(
-            (d) => d.outcome === "success"
-          ).length;
-          const successRate =
-            investedDiscoveries.length > 0
-              ? (successfulInvestments / investedDiscoveries.length) * 100
-              : 0;
-          const avgQualityScore =
-            allDiscoveries.reduce((sum, d) => sum + d.qualityScore, 0) /
-            allDiscoveries.length;
+        // Always show performance summary, even with 0 discoveries
+        const investedDiscoveries = allDiscoveries.filter((d) => d.invested);
+        const successfulInvestments = allDiscoveries.filter(
+          (d) => d.outcome === "success"
+        ).length;
+        const successRate =
+          investedDiscoveries.length > 0
+            ? (successfulInvestments / investedDiscoveries.length) * 100
+            : 0;
+        const avgQualityScore =
+          allDiscoveries.length > 0
+            ? allDiscoveries.reduce(
+                (sum, d) => sum + (d.qualityScore || 0),
+                0
+              ) / allDiscoveries.length
+            : 0;
 
-          const topPerformer = allDiscoveries
-            .filter((d) => d.performance > 0)
-            .sort((a, b) => b.performance - a.performance)[0];
+        const topPerformer = allDiscoveries
+          .filter((d) => d.performance > 0)
+          .sort((a, b) => b.performance - a.performance)[0];
 
-          context += "\n[PERFORMANCE SUMMARY]\n";
-          context += `Total discoveries: ${allDiscoveries.length}\n`;
-          context += `Invested in: ${investedDiscoveries.length}\n`;
-          context += `Success rate: ${successRate.toFixed(1)}%\n`;
-          context += `Average quality score: ${avgQualityScore.toFixed(1)}\n`;
-          context += `Top performer: ${topPerformer?.ticker || "None yet"}\n\n`;
-        }
+        context += "\n[PERFORMANCE SUMMARY]\n";
+        context += `Total discoveries: ${allDiscoveries.length}\n`;
+        context += `Invested in: ${investedDiscoveries.length}\n`;
+        context += `Success rate: ${successRate.toFixed(1)}%\n`;
+        context += `Average quality score: ${avgQualityScore.toFixed(1)}\n`;
+        context += `Top performer: ${topPerformer?.ticker || "None yet"}\n\n`;
       } catch (error) {
         this.logger.warn(
           "Could not add performance summary to context",
           error.message
         );
+        // Add default performance summary when data is unavailable
+        context += "\n[PERFORMANCE SUMMARY]\n";
+        context += `Total discoveries: 0\n`;
+        context += `Invested in: 0\n`;
+        context += `Success rate: 0.0%\n`;
+        context += `Average quality score: 0.0\n`;
+        context += `Top performer: None yet\n\n`;
       }
 
       if (context.length > 0) {

@@ -3,6 +3,13 @@
  * Builds daily micro-cap biotech universe using FMP screener and ADV calculation
  */
 
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  QueryCommand,
+} = require("@aws-sdk/lib-dynamodb");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { getEnvConfig } = require("../../config/environment");
@@ -17,9 +24,10 @@ class UniverseService {
     this.envConfig = getEnvConfig();
 
     // Initialize DynamoDB
-    this.dynamodb = new (require("aws-sdk").DynamoDB.DocumentClient)({
+    const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "us-east-1",
     });
+    this.dynamodb = DynamoDBDocumentClient.from(client);
 
     this.tableName =
       process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;
@@ -424,7 +432,7 @@ class UniverseService {
         Item: item,
       };
 
-      await this.dynamodb.put(params).promise();
+      await this.dynamodb.send(new PutCommand(params));
 
       this.logger.info("Universe snapshot persisted", {
         snapshotId: snapshot.id,
@@ -452,7 +460,7 @@ class UniverseService {
         Limit: 1,
       };
 
-      const result = await this.dynamodb.query(params).promise();
+      const result = await this.dynamodb.send(new QueryCommand(params));
 
       if (result.Items && result.Items.length > 0) {
         return result.Items[0];
@@ -478,7 +486,7 @@ class UniverseService {
         },
       };
 
-      const result = await this.dynamodb.get(params).promise();
+      const result = await this.dynamodb.send(new GetCommand(params));
       return result.Item || null;
     } catch (error) {
       this.logger.error("Failed to get universe by date", error);

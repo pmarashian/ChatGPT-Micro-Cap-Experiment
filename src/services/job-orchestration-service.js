@@ -3,18 +3,28 @@
  * Manages job scheduling, execution tracking, and status management
  */
 
-const AWS = require("aws-sdk");
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  UpdateCommand,
+  QueryCommand,
+  DeleteCommand,
+} = require("@aws-sdk/lib-dynamodb");
 const cronParser = require("cron-parser");
 const moment = require("moment-timezone");
 const Logger = require("../utils/logger");
+const { isOffline } = require("../utils/environment");
 
 /**
  * Create DynamoDB client
  */
 function createDynamoClient() {
-  return new AWS.DynamoDB.DocumentClient({
+  const client = new DynamoDBClient({
     region: process.env.AWS_REGION || "us-east-1",
   });
+  return DynamoDBDocumentClient.from(client);
 }
 
 /**
@@ -41,16 +51,9 @@ function getNextRunTime(cronExpression, timezone = "America/New_York") {
     const hour = fields.hour[0];
     const minute = fields.minute[0];
 
-    console.log(
-      `Cron expression ${cronExpression} parsed: hour=${hour}, minute=${minute}`
-    );
-
     // Get current time in the target timezone
     const now = moment();
     const nowInTimezone = now.clone().tz(timezone);
-
-    console.log(`Current time UTC: ${now.toISOString()}`);
-    console.log(`Current time in ${timezone}: ${nowInTimezone.format()}`);
 
     // Create today's scheduled time in the target timezone
     let scheduledTime = nowInTimezone
@@ -60,33 +63,21 @@ function getNextRunTime(cronExpression, timezone = "America/New_York") {
       .second(0)
       .millisecond(0);
 
-    console.log(
-      `Today's scheduled time in ${timezone}: ${scheduledTime.format()}`
-    );
-
     // If the scheduled time has already passed today, move to tomorrow
     if (
       scheduledTime.isBefore(nowInTimezone) ||
       scheduledTime.isSame(nowInTimezone)
     ) {
       scheduledTime = scheduledTime.add(1, "day");
-      console.log(
-        `Scheduled time moved to tomorrow: ${scheduledTime.format()}`
-      );
     }
 
     // Convert the scheduled time back to UTC for storage
     const scheduledTimeUTC = scheduledTime.clone().utc();
 
-    console.log(
-      `${cronExpression} next run in ${timezone}: ${scheduledTime.format()}`
-    );
-    console.log(
-      `${cronExpression} next run UTC: ${scheduledTimeUTC.toISOString()}`
-    );
-
     return scheduledTimeUTC.toDate();
   } catch (error) {
+    // Note: This function doesn't receive a logger parameter, so we keep the static call
+    // but this explains why some logs don't have unique IDs
     Logger.error(
       `Failed to parse cron expression "${cronExpression}": ${error.message}`,
       {
@@ -98,6 +89,7 @@ function getNextRunTime(cronExpression, timezone = "America/New_York") {
 
     // Fallback: return a time 1 hour from now in the specified timezone
     const fallback = moment().tz(timezone).add(1, "hour").startOf("hour");
+
     Logger.warn(`Using fallback schedule: ${fallback.format()}`, {
       cronExpression,
       timezone,
@@ -112,13 +104,6 @@ function getNextRunTime(cronExpression, timezone = "America/New_York") {
  * Check if a job should run based on its schedule and status
  */
 function shouldRunJob(job) {
-  Logger.debug(`Checking if job should run: ${job.jobName}`, {
-    jobName: job.jobName,
-    status: job.status,
-    enabled: job.enabled,
-    nextRun: job.nextRun,
-  });
-
   if (!job.enabled) {
     return false;
   }
@@ -141,9 +126,9 @@ async function getJobsToRun(logger) {
   const tableName = getJobTableName();
 
   try {
-    // Query for all enabled job configurations using TickerIndex
-    const result = await dynamo
-      .query({
+    // Query enabled jobs using GSI (efficient, but eventually consistent)
+    const result = await dynamo.send(
+      new QueryCommand({
         TableName: tableName,
         IndexName: "TickerIndex",
         KeyConditionExpression: "GSI1PK = :gsi1pk",
@@ -151,16 +136,97 @@ async function getJobsToRun(logger) {
           ":gsi1pk": "JOB#enabled",
         },
       })
-      .promise();
+    );
 
     const jobs = result.Items || [];
+
+    logger.verbose(`Current time: ${new Date().toISOString()}`);
 
     // Filter jobs that should run
     const jobsToRun = jobs.filter(shouldRunJob);
 
-    return jobsToRun;
+    // Deduplicate jobs by jobName to prevent multiple executions
+    const uniqueJobs = [];
+    const seenJobNames = new Set();
+
+    for (const job of jobsToRun) {
+      if (!seenJobNames.has(job.jobName)) {
+        seenJobNames.add(job.jobName);
+        uniqueJobs.push(job);
+      } else {
+        logger.warn(`Duplicate job found in results, skipping`, {
+          jobName: job.jobName,
+          pk: job.PK,
+          sk: job.SK,
+        });
+      }
+    }
+
+    return uniqueJobs;
   } catch (error) {
     logger.error("Failed to query jobs", error);
+    throw error;
+  }
+}
+
+/**
+ * Attempt to mark job as running with conditional update to prevent race conditions
+ */
+async function tryMarkJobRunning(jobName, executionId, logger) {
+  const dynamo = createDynamoClient();
+  const tableName = getJobTableName();
+  const now = new Date();
+
+  try {
+    await dynamo.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: {
+          PK: `JOB#${jobName}`,
+          SK: "JOB",
+        },
+        UpdateExpression: `
+          SET #status = :status,
+              lastUpdated = :lastUpdated,
+              executionId = :executionId,
+              startedAt = :startedAt
+        `,
+        ConditionExpression:
+          "attribute_not_exists(#status) OR #status <> :runningStatus", // Only update if NOT already running
+        ExpressionAttributeNames: {
+          "#status": "status",
+        },
+        ExpressionAttributeValues: {
+          ":status": "running",
+          ":lastUpdated": now.toISOString(),
+          ":executionId": executionId,
+          ":startedAt": now.toISOString(),
+          ":runningStatus": "running",
+        },
+      })
+    );
+
+    logger.info(`Successfully marked job as running`, {
+      jobName,
+      executionId,
+    });
+    return { success: true };
+  } catch (error) {
+    if (
+      error.code === "ConditionalCheckFailedException" ||
+      error.name === "ConditionalCheckFailedException"
+    ) {
+      logger.debug(`Job already running, skipping execution`, {
+        jobName,
+        executionId,
+      });
+      return { success: false, reason: "already_running" };
+    }
+    logger.error(`Failed to mark job as running`, {
+      jobName,
+      executionId,
+      error: error.message,
+    });
     throw error;
   }
 }
@@ -172,7 +238,8 @@ async function updateJobStatus(
   jobName,
   status,
   executionId = null,
-  error = null
+  error = null,
+  logger = null
 ) {
   const dynamo = createDynamoClient();
   const tableName = getJobTableName();
@@ -222,19 +289,28 @@ async function updateJobStatus(
       updateParams.ExpressionAttributeValues[":failedAt"] = now.toISOString();
     }
 
-    await dynamo.update(updateParams).promise();
+    await dynamo.send(new UpdateCommand(updateParams));
 
     // If job completed or failed, update next run time
     if (status === "completed" || status === "failed") {
-      await updateNextRunTime(jobName);
+      await updateNextRunTime(jobName, logger);
     }
   } catch (error) {
-    Logger.error(`Failed to update job status for ${jobName}`, {
-      jobName,
-      status,
-      executionId,
-      error: error.message,
-    });
+    if (logger) {
+      logger.error(`Failed to update job status for ${jobName}`, {
+        jobName,
+        status,
+        executionId,
+        error: error.message,
+      });
+    } else {
+      Logger.error(`Failed to update job status for ${jobName}`, {
+        jobName,
+        status,
+        executionId,
+        error: error.message,
+      });
+    }
     throw error;
   }
 }
@@ -242,21 +318,21 @@ async function updateJobStatus(
 /**
  * Update job's next run time based on its schedule
  */
-async function updateNextRunTime(jobName) {
+async function updateNextRunTime(jobName, logger = null) {
   const dynamo = createDynamoClient();
   const tableName = getJobTableName();
 
   try {
     // Get job configuration
-    const configResult = await dynamo
-      .get({
+    const configResult = await dynamo.send(
+      new GetCommand({
         TableName: tableName,
         Key: {
           PK: `JOB#${jobName}`,
           SK: "JOB",
         },
       })
-      .promise();
+    );
 
     if (!configResult.Item) {
       throw new Error(`Job configuration not found: ${jobName}`);
@@ -265,13 +341,9 @@ async function updateNextRunTime(jobName) {
     const job = configResult.Item;
     const nextRun = getNextRunTime(job.schedule, job.timezone);
 
-    console.log(
-      `Updating ${jobName} next run time to ${nextRun.toISOString()}`
-    );
-
     // Update next run time
-    await dynamo
-      .update({
+    await dynamo.send(
+      new UpdateCommand({
         TableName: tableName,
         Key: {
           PK: `JOB#${jobName}`,
@@ -284,12 +356,19 @@ async function updateNextRunTime(jobName) {
           ":lastScheduled": new Date().toISOString(),
         },
       })
-      .promise();
+    );
   } catch (error) {
-    Logger.error(`Failed to update next run time for ${jobName}`, {
-      jobName,
-      error: error.message,
-    });
+    if (logger) {
+      logger.error(`Failed to update next run time for ${jobName}`, {
+        jobName,
+        error: error.message,
+      });
+    } else {
+      Logger.error(`Failed to update next run time for ${jobName}`, {
+        jobName,
+        error: error.message,
+      });
+    }
     throw error;
   }
 }
@@ -297,27 +376,34 @@ async function updateNextRunTime(jobName) {
 /**
  * Get current job status
  */
-async function getJobStatus(jobName) {
+async function getJobStatus(jobName, logger = null) {
   const dynamo = createDynamoClient();
   const tableName = getJobTableName();
 
   try {
-    const result = await dynamo
-      .get({
+    const result = await dynamo.send(
+      new GetCommand({
         TableName: tableName,
         Key: {
           PK: `JOB#${jobName}`,
           SK: "JOB",
         },
       })
-      .promise();
+    );
 
     return result.Item || { status: "unknown" };
   } catch (error) {
-    Logger.error(`Failed to get job status for ${jobName}`, {
-      jobName,
-      error: error.message,
-    });
+    if (logger) {
+      logger.error(`Failed to get job status for ${jobName}`, {
+        jobName,
+        error: error.message,
+      });
+    } else {
+      Logger.error(`Failed to get job status for ${jobName}`, {
+        jobName,
+        error: error.message,
+      });
+    }
     throw error;
   }
 }
@@ -331,8 +417,8 @@ async function handleTimedOutJobs(logger) {
 
   try {
     // Query for enabled jobs and filter for running status
-    const result = await dynamo
-      .query({
+    const result = await dynamo.send(
+      new QueryCommand({
         TableName: tableName,
         IndexName: "TickerIndex",
         KeyConditionExpression: "GSI1PK = :enabled",
@@ -345,27 +431,25 @@ async function handleTimedOutJobs(logger) {
           ":runningStatus": "running",
         },
       })
-      .promise();
+    );
 
     const runningJobs = result.Items || [];
     const now = new Date();
-
-    logger.debug(`Checking ${runningJobs.length} running jobs for timeouts`);
 
     let timedOutCount = 0;
 
     for (const job of runningJobs) {
       try {
         const startedAt = new Date(job.startedAt);
-        const configResult = await dynamo
-          .get({
+        const configResult = await dynamo.send(
+          new GetCommand({
             TableName: tableName,
             Key: {
               PK: job.PK,
               SK: "JOB",
             },
           })
-          .promise();
+        );
 
         const config = configResult.Item;
         if (config && config.maxRuntime) {
@@ -394,7 +478,8 @@ async function handleTimedOutJobs(logger) {
               jobName,
               "timed_out",
               job.executionId,
-              timeoutError
+              timeoutError,
+              logger
             );
             timedOutCount++;
 
@@ -423,8 +508,6 @@ async function handleTimedOutJobs(logger) {
 
     if (timedOutCount > 0) {
       logger.warn(`${timedOutCount} jobs were marked as timed out`);
-    } else {
-      logger.debug("No jobs timed out this cycle");
     }
   } catch (error) {
     logger.error("Failed to handle timed out jobs", error);
@@ -444,8 +527,8 @@ async function initializeJob(jobConfig) {
   const nextRun = getNextRunTime(jobConfig.schedule, jobConfig.timezone);
 
   // Create single job item with all configuration and status information
-  await dynamo
-    .put({
+  await dynamo.send(
+    new PutCommand({
       TableName: tableName,
       Item: {
         PK: `JOB#${jobName}`,
@@ -463,7 +546,7 @@ async function initializeJob(jobConfig) {
         executionId: null,
       },
     })
-    .promise();
+  );
 }
 
 /**
@@ -475,8 +558,8 @@ async function cleanupExpiredLocks(logger) {
 
   try {
     // Query for expired orchestrator locks
-    const result = await dynamo
-      .query({
+    const result = await dynamo.send(
+      new QueryCommand({
         TableName: tableName,
         IndexName: "TickerIndex",
         KeyConditionExpression: "GSI1PK = :gsi1pk",
@@ -486,7 +569,7 @@ async function cleanupExpiredLocks(logger) {
           ":now": new Date().toISOString(),
         },
       })
-      .promise();
+    );
 
     const expiredLocks = result.Items || [];
 
@@ -501,15 +584,15 @@ async function cleanupExpiredLocks(logger) {
       // Delete expired locks
       for (const lock of expiredLocks) {
         try {
-          await dynamo
-            .delete({
+          await dynamo.send(
+            new DeleteCommand({
               TableName: tableName,
               Key: {
                 PK: lock.PK,
                 SK: lock.SK,
               },
             })
-            .promise();
+          );
 
           logger.debug("Cleaned up expired orchestrator lock", {
             executionId: lock.executionId,
@@ -523,10 +606,26 @@ async function cleanupExpiredLocks(logger) {
         }
       }
     } else {
-      logger.debug("No expired orchestrator locks found");
+      // logger.debug("No expired orchestrator locks found");
     }
   } catch (error) {
-    logger.warn("Failed to cleanup expired locks", { error: error.message });
+    if (
+      error.name === "ResourceNotFoundException" ||
+      error.code === "ResourceNotFoundException"
+    ) {
+      logger.debug(
+        "DynamoDB table not found for lock cleanup (development mode)",
+        {
+          tableName,
+        }
+      );
+    } else {
+      logger.warn("Failed to cleanup expired locks", {
+        error: error.message,
+        errorCode: error.code,
+        errorName: error.name,
+      });
+    }
     // Don't throw - cleanup failure shouldn't block lock acquisition
   }
 }
@@ -534,13 +633,11 @@ async function cleanupExpiredLocks(logger) {
 /**
  * Acquire orchestrator lock to prevent concurrent execution
  */
-async function acquireOrchestratorLock(logger) {
+async function acquireOrchestratorLock({ logger, executionId }) {
   const dynamo = createDynamoClient();
   const tableName = getJobTableName();
   const lockId = "orchestrator-lock";
-  const executionId = `exec_${Date.now()}_${Math.random()
-    .toString(36)
-    .substr(2, 9)}`;
+
   const lockExpiry = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minute lock
 
   try {
@@ -548,36 +645,135 @@ async function acquireOrchestratorLock(logger) {
     await cleanupExpiredLocks(logger);
 
     // Try to create/update the lock item with proper GSI indexing
-    await dynamo
-      .put({
-        TableName: tableName,
-        Item: {
-          PK: `LOCK#${lockId}`,
-          SK: "LOCK",
-          GSI1PK: "LOCK#orchestrator", // For querying all orchestrator locks
-          GSI1SK: executionId,
-          executionId,
-          acquiredAt: new Date().toISOString(),
-          expiresAt: lockExpiry,
-          status: "active",
-          lockType: "orchestrator",
-        },
-        ConditionExpression: "attribute_not_exists(PK) OR expiresAt < :now",
-        ExpressionAttributeValues: {
-          ":now": new Date().toISOString(),
-        },
-      })
-      .promise();
+    try {
+      await dynamo.send(
+        new PutCommand({
+          TableName: tableName,
+          Item: {
+            PK: `LOCK#${lockId}`,
+            SK: "LOCK",
+            GSI1PK: "LOCK#orchestrator", // For querying all orchestrator locks
+            GSI1SK: executionId,
+            executionId,
+            acquiredAt: new Date().toISOString(),
+            expiresAt: lockExpiry,
+            status: "active",
+            lockType: "orchestrator",
+          },
+          ConditionExpression: "attribute_not_exists(PK)",
+        })
+      );
+    } catch (conditionalError) {
+      if (
+        conditionalError.code === "ConditionalCheckFailedException" ||
+        conditionalError.name === "ConditionalCheckFailedException"
+      ) {
+        // Lock already exists, try to delete it and create a new one
+        try {
+          // First try to get the existing lock to check if it's expired
+          const existingLock = await dynamo.send(
+            new GetCommand({
+              TableName: tableName,
+              Key: {
+                PK: `LOCK#${lockId}`,
+                SK: "LOCK",
+              },
+            })
+          );
 
-    logger.debug("Orchestrator lock acquired", { executionId, lockExpiry });
+          if (existingLock.Item) {
+            const expiresAt = new Date(existingLock.Item.expiresAt);
+            const now = new Date();
+
+            if (expiresAt < now) {
+              // Lock is expired, delete it and create a new one
+              await dynamo.send(
+                new DeleteCommand({
+                  TableName: tableName,
+                  Key: {
+                    PK: `LOCK#${lockId}`,
+                    SK: "LOCK",
+                  },
+                })
+              );
+
+              // Now create the new lock
+              await dynamo.send(
+                new PutCommand({
+                  TableName: tableName,
+                  Item: {
+                    PK: `LOCK#${lockId}`,
+                    SK: "LOCK",
+                    GSI1PK: "LOCK#orchestrator", // For querying all orchestrator locks
+                    GSI1SK: executionId,
+                    executionId,
+                    acquiredAt: new Date().toISOString(),
+                    expiresAt: lockExpiry,
+                    status: "active",
+                    lockType: "orchestrator",
+                  },
+                })
+              );
+            } else {
+              // Lock exists and is not expired
+              return { success: false, executionId: null };
+            }
+          } else {
+            // Lock doesn't exist anymore, create it
+            await dynamo.send(
+              new PutCommand({
+                TableName: tableName,
+                Item: {
+                  PK: `LOCK#${lockId}`,
+                  SK: "LOCK",
+                  GSI1PK: "LOCK#orchestrator", // For querying all orchestrator locks
+                  GSI1SK: executionId,
+                  executionId,
+                  acquiredAt: new Date().toISOString(),
+                  expiresAt: lockExpiry,
+                  status: "active",
+                  lockType: "orchestrator",
+                },
+              })
+            );
+          }
+        } catch (updateError) {
+          logger.warn("Failed to update existing lock", {
+            error: updateError.message,
+            executionId,
+          });
+          // If we can't update the lock, assume it's still active
+          return { success: false, executionId: null };
+        }
+      } else {
+        throw conditionalError;
+      }
+    }
+
     return { success: true, executionId };
   } catch (error) {
-    if (error.code === "ConditionalCheckFailedException") {
-      return { success: false, executionId: null };
+    // Handle cases where the table doesn't exist or other unexpected errors
+    if (
+      error.name === "ResourceNotFoundException" ||
+      error.code === "ResourceNotFoundException"
+    ) {
+      logger.warn(
+        "DynamoDB table not found, proceeding without lock (development mode)",
+        {
+          executionId,
+          tableName,
+          errorName: error.name,
+          errorCode: error.code,
+        }
+      );
+      return { success: true, executionId }; // Allow execution in development
     }
+
     logger.error("Unexpected error acquiring orchestrator lock", {
       executionId,
       error: error.message,
+      errorCode: error.code,
+      errorName: error.name,
     });
     throw error;
   }
@@ -593,15 +789,15 @@ async function deleteOrchestratorLock(executionId, logger) {
 
   try {
     // First, try to get the current lock to verify it exists and matches our executionId
-    const getResult = await dynamo
-      .get({
+    const getResult = await dynamo.send(
+      new GetCommand({
         TableName: tableName,
         Key: {
           PK: `LOCK#${lockId}`,
           SK: "LOCK",
         },
       })
-      .promise();
+    );
 
     if (!getResult.Item) {
       logger.warn("Orchestrator lock not found for release", { executionId });
@@ -620,17 +816,15 @@ async function deleteOrchestratorLock(executionId, logger) {
     }
 
     // Delete the lock entirely
-    await dynamo
-      .delete({
+    await dynamo.send(
+      new DeleteCommand({
         TableName: tableName,
         Key: {
           PK: `LOCK#${lockId}`,
           SK: "LOCK",
         },
       })
-      .promise();
-
-    logger.info("Orchestrator lock deleted successfully", { executionId });
+    );
   } catch (error) {
     logger.error("Failed to delete orchestrator lock", {
       executionId,
@@ -700,7 +894,7 @@ async function completeJobExecution(
         now.toISOString();
     }
 
-    await dynamo.update(updateParams).promise();
+    await dynamo.send(new UpdateCommand(updateParams));
 
     // Update next run time for completed or failed jobs
     await updateNextRunTime(jobName);
@@ -727,29 +921,31 @@ async function completeJobExecution(
  * Check if orchestration is enabled
  */
 async function isOrchestrationEnabled(logger) {
+  if (isOffline()) {
+    return true;
+  }
+
   const dynamo = createDynamoClient();
   const tableName = getJobTableName();
 
   try {
-    const result = await dynamo
-      .get({
+    const result = await dynamo.send(
+      new GetCommand({
         TableName: tableName,
         Key: {
           PK: "SYSTEM#orchestration",
           SK: "CONFIG",
         },
       })
-      .promise();
+    );
 
-    const isEnabled = result.Item ? result.Item.enabled : true; // Default to true if not set
+    if (!result?.Item) {
+      logger.debug(
+        "Orchestration enabled status not found, defaulting to false"
+      );
+    }
 
-    logger.debug("Orchestration enabled status checked", {
-      enabled: isEnabled,
-      hasConfig: !!result.Item,
-      result: result.Item,
-    });
-
-    return isEnabled;
+    return result?.Item?.enabled;
   } catch (error) {
     logger.error("Failed to check orchestration enabled status", {
       error: error.message,
@@ -767,8 +963,8 @@ async function setOrchestrationEnabled(enabled, logger) {
   const tableName = getJobTableName();
 
   try {
-    await dynamo
-      .put({
+    await dynamo.send(
+      new PutCommand({
         TableName: tableName,
         Item: {
           PK: "SYSTEM#orchestration",
@@ -778,7 +974,7 @@ async function setOrchestrationEnabled(enabled, logger) {
           type: "orchestration_config",
         },
       })
-      .promise();
+    );
 
     logger.info("Orchestration enabled status updated", {
       enabled,
@@ -803,8 +999,8 @@ async function getAllOrchestratorLocks(logger) {
   const tableName = getJobTableName();
 
   try {
-    const result = await dynamo
-      .query({
+    const result = await dynamo.send(
+      new QueryCommand({
         TableName: tableName,
         IndexName: "TickerIndex",
         KeyConditionExpression: "GSI1PK = :gsi1pk",
@@ -813,7 +1009,7 @@ async function getAllOrchestratorLocks(logger) {
         },
         ScanIndexForward: false, // Most recent first
       })
-      .promise();
+    );
 
     const locks = result.Items || [];
     logger.debug(`Found ${locks.length} orchestrator locks`, {
@@ -838,6 +1034,7 @@ async function getAllOrchestratorLocks(logger) {
 module.exports = {
   getJobsToRun,
   updateJobStatus,
+  tryMarkJobRunning,
   getJobStatus,
   handleTimedOutJobs,
   initializeJob,
