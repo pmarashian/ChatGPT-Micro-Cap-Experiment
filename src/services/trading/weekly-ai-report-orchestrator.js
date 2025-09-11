@@ -9,6 +9,7 @@ const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient } = require("@aws-sdk/lib-dynamodb");
+const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
 
 /**
  * Execute weekly AI report with consistent orchestration
@@ -36,7 +37,7 @@ async function performWeeklyAIReport(options = {}) {
     const portfolioService = new PortfolioService();
     const aiService = new AIService();
     const envConfig = require("../../config/environment").getEnvConfig();
-    const ses = new AWS.SES({ region: envConfig.sesRegion });
+    const ses = new SESClient({ region: envConfig.sesRegion });
 
     const portfolio = await portfolioService.getCurrentPortfolio();
     const recentTrades = await portfolioService.getTradingHistory(7);
@@ -89,7 +90,8 @@ async function sendEmail(ses, envConfig, subject, content) {
       Body: { Text: { Data: content } },
     },
   };
-  await ses.sendEmail(params).promise();
+  const command = new SendEmailCommand(params);
+  await ses.send(command);
 }
 
 module.exports = {

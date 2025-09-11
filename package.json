@@ -21,6 +21,7 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.490.0",
     "@aws-sdk/client-lambda": "^3.490.0",
+    "@aws-sdk/client-ses": "^3.490.0",
     "@aws-sdk/lib-dynamodb": "^3.490.0",
     "@logtail/node": "^0.5.6",
     "axios": "^1.6.0",

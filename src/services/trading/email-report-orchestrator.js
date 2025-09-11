@@ -9,6 +9,7 @@ const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient } = require("@aws-sdk/lib-dynamodb");
+const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
 
 /**
  * Generate portfolio summary statistics
@@ -358,7 +359,8 @@ async function sendEmailReport(ses, envConfig, emailContent, reportData) {
   };
 
   try {
-    const result = await ses.sendEmail(params).promise();
+    const command = new SendEmailCommand(params);
+    const result = await ses.send(command);
     return result;
   } catch (error) {
     throw new Error(`Email delivery failed: ${error.message}`);
@@ -490,7 +492,7 @@ async function performEmailReport(options = {}) {
     const envConfig = require("../../config/environment").getEnvConfig();
 
     // Initialize SES
-    const ses = new AWS.SES({ region: envConfig.sesRegion });
+    const ses = new SESClient({ region: envConfig.sesRegion });
 
     // 1. Get current portfolio data
     logInstance.info("Fetching portfolio data for report");
@@ -534,7 +536,19 @@ async function performEmailReport(options = {}) {
 </body>`
         );
       } catch (e) {
-        logInstance.warn("AI human report generation failed", e);
+        logInstance.warn("AI human report generation failed", {
+          error: e.message,
+          stack: e.stack,
+          portfolioData: {
+            hasPositions: portfolio?.positions?.length > 0,
+            positionCount: portfolio?.positions?.length || 0,
+            totalValue: portfolio?.totalValue,
+            cash: portfolio?.cash,
+          },
+          recentTradesCount: recentTrades?.length || 0,
+          envEnabled: process.env.ENABLE_AI_HUMAN_REPORTS,
+        });
+        logInstance.error("AI human report generation error details", e);
       }
     }
 

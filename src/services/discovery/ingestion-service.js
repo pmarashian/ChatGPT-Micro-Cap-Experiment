@@ -17,8 +17,12 @@ const { DYNAMODB_TABLES, DISCOVERY_CONFIG } = require("../../config/constants");
 
 class IngestionService {
   constructor() {
-    this.logger = new Logger("ingestion-service");
-    this.errorHandler = new ErrorHandler("ingestion-service");
+    // Generate unique ID for this ingestion session
+    const uniqueId = `ingest-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+    this.logger = new Logger("ingestion-service", { uniqueId });
+    this.errorHandler = new ErrorHandler("ingestion-service", { uniqueId });
     this.envConfig = getEnvConfig();
 
     // Initialize DynamoDB
@@ -336,6 +340,10 @@ class IngestionService {
     try {
       const url = `${this.fmpBaseUrl}/key-metrics/${ticker}?apikey=${this.fmpApiKey}&limit=1`;
 
+      this.logger.debug(`Fetching fundamentals from FMP for ${ticker}`, {
+        url,
+      });
+
       const response = await axios.get(url, {
         timeout: 30000,
         headers: {
@@ -344,19 +352,65 @@ class IngestionService {
         },
       });
 
-      if (
-        !response.data ||
-        !Array.isArray(response.data) ||
-        response.data.length === 0
-      ) {
+      if (!response.data) {
+        this.logger.warn(`No response data from FMP for ${ticker}`);
         return null;
       }
 
-      return response.data[0]; // Return most recent
-    } catch (error) {
-      this.logger.debug(
-        `FMP fundamentals fetch failed for ${ticker}: ${error.message}`
+      if (!Array.isArray(response.data)) {
+        this.logger.warn(`FMP response for ${ticker} is not an array`, {
+          responseType: typeof response.data,
+          responseKeys: Object.keys(response.data),
+        });
+        return null;
+      }
+
+      if (response.data.length === 0) {
+        this.logger.debug(`No fundamentals data available for ${ticker}`);
+        return null;
+      }
+
+      const fundamentalsData = response.data[0];
+
+      // Validate the fundamentals data structure
+      if (!fundamentalsData || typeof fundamentalsData !== "object") {
+        this.logger.warn(`Invalid fundamentals data structure for ${ticker}`, {
+          dataType: typeof fundamentalsData,
+          data: fundamentalsData,
+        });
+        return null;
+      }
+
+      // Check for required fields
+      const requiredFields = ["symbol", "date", "calendarYear"];
+      const missingFields = requiredFields.filter(
+        (field) => !fundamentalsData[field]
       );
+
+      if (missingFields.length > 0) {
+        this.logger.warn(`Missing required fields for ${ticker}`, {
+          missingFields,
+          availableFields: Object.keys(fundamentalsData),
+          sampleData: JSON.stringify(fundamentalsData).substring(0, 500),
+        });
+      }
+
+      this.logger.debug(`Successfully fetched fundamentals for ${ticker}`, {
+        symbol: fundamentalsData.symbol,
+        date: fundamentalsData.date,
+        calendarYear: fundamentalsData.calendarYear,
+        dataSize: JSON.stringify(fundamentalsData).length,
+      });
+
+      return fundamentalsData;
+    } catch (error) {
+      this.logger.error(`FMP fundamentals fetch failed for ${ticker}`, {
+        error: error.message,
+        errorType: error.constructor.name,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        ticker: ticker,
+      });
       return null;
     }
   }
@@ -420,8 +474,26 @@ class IngestionService {
     try {
       const timestamp = new Date().toISOString();
 
+      // Validate input data
+      if (!fundamentalsData || typeof fundamentalsData !== "object") {
+        throw new Error(
+          `Invalid fundamentals data for ${ticker}: data is null or not an object`
+        );
+      }
+
+      // Check for required fields
+      const asOfDate = fundamentalsData.date || fundamentalsData.calendarYear;
+      if (!asOfDate) {
+        throw new Error(
+          `Missing asOfDate for ${ticker}: no date or calendarYear field`
+        );
+      }
+
       // Calculate derived metrics
       const structured = this.calculateFundamentalsMetrics(fundamentalsData);
+
+      // Trim raw data to stay under DynamoDB limits
+      const trimmedRaw = this.trimRawData(fundamentalsData);
 
       const item = {
         // Primary Key (composite)
@@ -435,15 +507,25 @@ class IngestionService {
         type: "fundamentals",
         ticker: ticker,
         source: "FMP",
-        asOfDate: fundamentalsData.date || fundamentalsData.calendarYear,
+        asOfDate: asOfDate,
         publishedAt: timestamp,
-        raw: this.trimRawData(fundamentalsData), // Trimmed to stay under 400KB
+        raw: trimmedRaw,
         structured: structured,
         recencyDays: 0, // Just ingested
         stale: false,
         // TTL: 30 days
         ttl: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
       };
+
+      // Validate item size (DynamoDB 400KB limit)
+      const itemSize = JSON.stringify(item).length;
+      if (itemSize > 400 * 1024) {
+        this.logger.warn(`Large item detected for ${ticker}`, {
+          itemSize: `${(itemSize / 1024).toFixed(2)}KB`,
+          rawSize: JSON.stringify(trimmedRaw).length,
+          structuredSize: JSON.stringify(structured).length,
+        });
+      }
 
       const params = {
         TableName: this.tableName,
@@ -452,12 +534,22 @@ class IngestionService {
 
       await this.dynamodb.send(new PutCommand(params));
 
-      // this.logger.debug(`Persisted fundamentals for ${ticker}`, {
-      //   asOfDate: item.asOfDate,
-      //   timestamp: timestamp,
-      // });
+      this.logger.debug(`Successfully persisted fundamentals for ${ticker}`, {
+        asOfDate: item.asOfDate,
+        itemSize: `${(itemSize / 1024).toFixed(2)}KB`,
+      });
     } catch (error) {
-      this.logger.error(`Failed to persist fundamentals for ${ticker}`, error);
+      // Enhanced error logging with more context
+      this.logger.error(`Failed to persist fundamentals for ${ticker}`, {
+        error: error.message,
+        errorType: error.constructor.name,
+        ticker: ticker,
+        hasData: !!fundamentalsData,
+        dataKeys: fundamentalsData ? Object.keys(fundamentalsData) : null,
+        asOfDate: fundamentalsData?.date || fundamentalsData?.calendarYear,
+        tableName: this.tableName,
+        timestamp: new Date().toISOString(),
+      });
       throw error;
     }
   }
@@ -532,19 +624,21 @@ class IngestionService {
    */
   calculateFundamentalsMetrics(data) {
     try {
-      const operatingCashFlow = data.operatingCashFlowPerShare || 0;
-      const capitalExpenditure = data.capExPerShare || 0;
-      const cash = data.cashAndCashEquivalents || 0;
-      const revenue = data.revenuePerShare || 0;
+      // Safely extract numeric values, defaulting to 0 for calculations
+      const operatingCashFlow = this.safeNumber(data.operatingCashFlowPerShare);
+      const capitalExpenditure = this.safeNumber(data.capExPerShare);
+      const cash = this.safeNumber(data.cashAndCashEquivalents);
+      const revenue = this.safeNumber(data.revenuePerShare);
+      const marketCap = this.safeNumber(data.marketCap);
 
       // Monthly burn = (operating cash flow - capex) / 12
       let monthlyBurn = 0;
-      if (operatingCashFlow && capitalExpenditure) {
+      if (operatingCashFlow !== 0 || capitalExpenditure !== 0) {
         monthlyBurn = Math.max(
           0,
           -(operatingCashFlow - capitalExpenditure) / 12
         );
-      } else if (revenue) {
+      } else if (revenue > 0) {
         // Fallback: estimate burn as 15% of revenue / 12
         monthlyBurn = (revenue * 0.15) / 12;
       }
@@ -559,20 +653,20 @@ class IngestionService {
       const undervalued =
         runwayMonths &&
         runwayMonths >= 12 &&
-        data.marketCap &&
-        revenue &&
-        data.marketCap < revenue;
+        marketCap > 0 &&
+        revenue > 0 &&
+        marketCap < revenue;
 
-      return {
-        marketCap: data.marketCap,
-        sharesOutstanding: data.weightedAverageShsOut,
-        float: data.floatShares,
-        cashAndCashEquivalents: cash,
-        totalDebt: data.totalDebt,
-        operatingCashFlow: operatingCashFlow,
-        capitalExpenditure: capitalExpenditure,
-        revenue: revenue,
-        eps: data.netIncomePerShare,
+      const result = {
+        marketCap: marketCap || null,
+        sharesOutstanding: this.safeNumber(data.weightedAverageShsOut) || null,
+        float: this.safeNumber(data.floatShares) || null,
+        cashAndCashEquivalents: cash || null,
+        totalDebt: this.safeNumber(data.totalDebt) || null,
+        operatingCashFlow: operatingCashFlow || null,
+        capitalExpenditure: capitalExpenditure || null,
+        revenue: revenue || null,
+        eps: this.safeNumber(data.netIncomePerShare) || null,
         runwayMonths: runwayMonths
           ? Math.round(runwayMonths * 100) / 100
           : null,
@@ -581,10 +675,40 @@ class IngestionService {
           undervalued: undervalued || false,
         },
       };
+
+      // Remove null values to keep the structured data clean
+      Object.keys(result).forEach((key) => {
+        if (result[key] === null || result[key] === undefined) {
+          delete result[key];
+        }
+        // Handle nested objects
+        if (typeof result[key] === "object" && result[key] !== null) {
+          const nested = result[key];
+          Object.keys(nested).forEach((nestedKey) => {
+            if (nested[nestedKey] === null || nested[nestedKey] === undefined) {
+              delete nested[nestedKey];
+            }
+          });
+        }
+      });
+
+      return result;
     } catch (error) {
       this.logger.warn("Failed to calculate fundamentals metrics", error);
       return {};
     }
+  }
+
+  /**
+   * Safely convert value to number, returning 0 for invalid values
+   * @param {*} value - Value to convert
+   */
+  safeNumber(value) {
+    if (value === null || value === undefined || value === "") {
+      return 0;
+    }
+    const num = Number(value);
+    return isNaN(num) ? 0 : num;
   }
 
   /**
@@ -606,7 +730,47 @@ class IngestionService {
       trimmed.text = trimmed.text.substring(0, 1000) + "...";
     }
 
+    // Remove undefined values to prevent DynamoDB errors
+    Object.keys(trimmed).forEach((key) => {
+      if (trimmed[key] === undefined || trimmed[key] === null) {
+        delete trimmed[key];
+      }
+      // Also handle nested objects/arrays recursively
+      if (typeof trimmed[key] === "object" && trimmed[key] !== null) {
+        trimmed[key] = this.removeUndefinedValues(trimmed[key]);
+      }
+    });
+
     return trimmed;
+  }
+
+  /**
+   * Recursively remove undefined and null values from objects/arrays
+   * @param {*} obj - Object, array, or primitive value
+   */
+  removeUndefinedValues(obj) {
+    if (obj === null || obj === undefined) {
+      return null;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj
+        .filter((item) => item !== undefined && item !== null)
+        .map((item) => this.removeUndefinedValues(item));
+    }
+
+    if (typeof obj === "object") {
+      const cleaned = {};
+      Object.keys(obj).forEach((key) => {
+        const value = obj[key];
+        if (value !== undefined && value !== null) {
+          cleaned[key] = this.removeUndefinedValues(value);
+        }
+      });
+      return cleaned;
+    }
+
+    return obj;
   }
 
   /**

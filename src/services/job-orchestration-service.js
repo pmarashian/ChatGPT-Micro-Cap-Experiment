@@ -41,7 +41,7 @@ function getJobTableName() {
  * Uses cron-parser library for proper cron expression parsing with timezone support
  */
 function getNextRunTime(cronExpression, timezone = "America/New_York") {
-  console.log("Getting next run time for", cronExpression, timezone);
+  // console.log("Getting next run time for", cronExpression, timezone);
   try {
     // Parse the cron expression to extract the schedule information
     const interval = cronParser.parseExpression(cronExpression);

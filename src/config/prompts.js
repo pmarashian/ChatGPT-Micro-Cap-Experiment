@@ -316,12 +316,80 @@ function formatPositionSizing(portfolioData, marketData) {
   return lines.join("\n");
 }
 
+/**
+ * Human report prompt template
+ * @param {Object} options - Options for building the human report prompt
+ * @param {string} options.period - 'daily' or 'weekly'
+ * @param {Object} options.portfolio - Current portfolio data
+ * @param {Array} options.recentTrades - Recent trading history
+ * @param {Object} options.aiContext - Historical AI context
+ * @param {Object} options.metrics - Performance metrics
+ * @returns {string} Complete human report prompt
+ */
+function buildHumanReportPrompt({
+  period,
+  portfolio,
+  recentTrades,
+  aiContext,
+  metrics,
+}) {
+  const reportType = period === "weekly" ? "Weekly" : "Daily";
+  const dateRange = period === "weekly" ? "past week" : "past 24 hours";
+
+  return `================================================================
+${reportType} Trading Performance Report — ${
+    new Date().toISOString().split("T")[0]
+  }
+================================================================
+
+You are writing a human-readable summary of the micro-cap trading system's ${period} performance and activity.
+
+PORTFOLIO OVERVIEW:
+- Total Value: $${portfolio?.totalValue?.toFixed(2) || "0.00"}
+- Cash Available: $${portfolio?.cash?.toFixed(2) || "0.00"}
+- Active Positions: ${portfolio?.positions?.length || 0}
+
+RECENT TRADING ACTIVITY (${recentTrades?.length || 0} trades in ${dateRange}):
+${
+  recentTrades?.length > 0
+    ? recentTrades
+        .map(
+          (trade) =>
+            `- ${trade.action.toUpperCase()} ${trade.shares} shares of ${
+              trade.ticker
+            } at $${trade.price?.toFixed(2)} (${trade.date})`
+        )
+        .join("\n")
+    : "- No trading activity during this period"
+}
+
+${
+  aiContext
+    ? `AI DECISION CONTEXT:
+${aiContext}`
+    : ""
+}
+
+INSTRUCTIONS:
+Write a concise, professional summary that covers:
+1. Overall portfolio performance and key metrics
+2. Summary of recent trading activity and rationale
+3. Current market positioning and risk assessment
+4. Key insights from AI decision-making process
+5. Forward-looking observations about market conditions
+
+Keep the report professional, factual, and focused on actionable insights. Use clear headings and bullet points for readability. Avoid speculation and focus on the data provided.
+
+Format your response as a well-structured report with appropriate sections and headings.`;
+}
+
 module.exports = {
   SYSTEM_MESSAGE_TRADING,
   SYSTEM_MESSAGE_RESEARCH,
   SYSTEM_MESSAGE_HUMAN_REPORT,
   buildTradingPrompt,
   buildResearchPrompt,
+  buildHumanReportPrompt,
   formatPortfolioSnapshot,
   formatPerformanceMetrics,
   formatPositionSizing,

@@ -22,7 +22,7 @@ const baseHandler = async (event, context) => {
 
   const nextRunTime = getNextRunTime("0 16 * * ?", "America/New_York");
 
-  logger.info(`Next run time: ${nextRunTime.toLocaleString()}`);
+  logger.info(`Next run time: ${nextRunTime.toISOString()}`);
 
   return {
     statusCode: 200,

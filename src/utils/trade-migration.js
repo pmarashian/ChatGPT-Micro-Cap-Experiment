@@ -107,9 +107,10 @@ async function verifyMigration() {
   const logger = new Logger("trade-migration-verify");
   const envConfig = getEnvConfig();
 
-  const dynamodb = new AWS.DynamoDB.DocumentClient({
+  const client = new DynamoDBClient({
     region: process.env.AWS_REGION || "us-east-1",
   });
+  const dynamodb = DynamoDBDocumentClient.from(client);
 
   const tableName =
     process.env.TRADING_TABLE_NAME || DYNAMODB_TABLES.TRADING_TABLE;

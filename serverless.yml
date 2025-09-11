@@ -179,6 +179,7 @@ functions:
   # Production: Yes - Operational monitoring and reporting
   emailReportWorker:
     handler: src/handlers/workers/email-report-worker.handler
+    timeout: 300
     # NOTE: No direct events - triggered by job orchestrator
 
   # Weekly AI Report Worker - Production

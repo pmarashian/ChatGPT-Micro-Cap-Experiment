@@ -5,6 +5,7 @@
 
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient } = require("@aws-sdk/lib-dynamodb");
+const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
 const Logger = require("../../utils/logger");
 const ErrorHandler = require("../../utils/error-handler");
 const { getEnvConfig } = require("../../config/environment");
@@ -26,7 +27,7 @@ class TestEmailHandler {
       const envConfig = getEnvConfig();
 
       // Initialize SES
-      const ses = new AWS.SES({ region: envConfig.sesRegion });
+      const ses = new SESClient({ region: envConfig.sesRegion });
 
       // Get recipient from query params or use admin email as default
       const recipient =
@@ -150,7 +151,8 @@ Trading System Notification Service
     };
 
     try {
-      return await ses.sendEmail(params).promise();
+      const command = new SendEmailCommand(params);
+      return await ses.send(command);
     } catch (error) {
       this.logger.error("Failed to send test email via SES", error);
       throw new Error(`SES email delivery failed: ${error.message}`);

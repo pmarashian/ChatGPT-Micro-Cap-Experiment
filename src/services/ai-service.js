@@ -410,43 +410,100 @@ class AIService {
    * @returns {Promise<{subject:string, content:string}>}
    */
   async getHumanReport({ period, portfolio, recentTrades, persist = true }) {
-    const aiContext = await this.memoryService.buildAIContext();
-    const prompt = buildHumanReportPrompt({
-      period,
-      portfolio,
-      recentTrades,
-      aiContext,
-      metrics: {},
-    });
+    try {
+      this.logger.info("Starting AI human report generation", {
+        period,
+        hasPortfolio: !!portfolio,
+        positionCount: portfolio?.positions?.length || 0,
+        recentTradesCount: recentTrades?.length || 0,
+        persist,
+      });
 
-    const content = await this.callOpenAIWithSystem(
-      prompt,
-      SYSTEM_MESSAGE_HUMAN_REPORT,
-      1200
-    );
+      // Build AI context
+      this.logger.debug("Building AI context for human report");
+      const aiContext = await this.memoryService.buildAIContext();
 
-    const dateStr = new Date().toISOString().split("T")[0];
-    const subject = `AI ${
-      period === "weekly" ? "Weekly" : "Daily"
-    } Report — ${dateStr}`;
+      // Build prompt
+      this.logger.debug("Building human report prompt", {
+        period,
+        portfolioExists: !!portfolio,
+        portfolioValue: portfolio?.totalValue,
+        portfolioCash: portfolio?.cash,
+        portfolioPositions: portfolio?.positions?.length,
+        recentTradesCount: recentTrades?.length,
+        aiContextLength: aiContext?.length,
+      });
 
-    if (persist) {
-      try {
-        await this.reportService.saveReport({
-          period,
-          subject,
-          content,
-          metadata: {
-            positions: portfolio.positions?.length || 0,
-            trades: recentTrades?.length || 0,
-          },
-        });
-      } catch (e) {
-        this.logger.warn("Failed to persist AI report", e);
+      const prompt = buildHumanReportPrompt({
+        period,
+        portfolio,
+        recentTrades,
+        aiContext,
+        metrics: {},
+      });
+
+      this.logger.debug("Human report prompt built successfully", {
+        promptLength: prompt?.length,
+        promptPreview: prompt?.substring(0, 200) + "...",
+      });
+
+      // Call OpenAI
+      this.logger.debug("Calling OpenAI for human report generation");
+      const content = await this.callOpenAIWithSystem(
+        prompt,
+        SYSTEM_MESSAGE_HUMAN_REPORT,
+        1200
+      );
+
+      const dateStr = new Date().toISOString().split("T")[0];
+      const subject = `AI ${
+        period === "weekly" ? "Weekly" : "Daily"
+      } Report — ${dateStr}`;
+
+      // Persist report if requested
+      if (persist) {
+        try {
+          this.logger.debug("Persisting AI report to database");
+          await this.reportService.saveReport({
+            period,
+            subject,
+            content,
+            metadata: {
+              positions: portfolio.positions?.length || 0,
+              trades: recentTrades?.length || 0,
+            },
+          });
+          this.logger.debug("AI report persisted successfully");
+        } catch (persistError) {
+          this.logger.warn("Failed to persist AI report", {
+            error: persistError.message,
+            period,
+            subject,
+          });
+          // Don't throw - report generation succeeded, just persistence failed
+        }
       }
-    }
 
-    return { subject, content };
+      this.logger.info("AI human report generated successfully", {
+        period,
+        contentLength: content?.length || 0,
+        subject,
+      });
+
+      return { subject, content };
+    } catch (error) {
+      this.logger.error("AI human report generation failed", {
+        error: error.message,
+        stack: error.stack,
+        period,
+        hasPortfolio: !!portfolio,
+        positionCount: portfolio?.positions?.length || 0,
+        recentTradesCount: recentTrades?.length || 0,
+        persist,
+        errorType: error.constructor.name,
+      });
+      throw error;
+    }
   }
 
   /**
