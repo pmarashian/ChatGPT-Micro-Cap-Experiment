@@ -56,19 +56,19 @@ const businessLogic = async ({ logger, errorHandler, uniqueId }) => {
     const orchestrationEnabled = await isOrchestrationEnabled(logger);
 
     if (!orchestrationEnabled) {
-      logger.verbose("Orchestration is disabled, skipping this cycle", {
+      logger.debug("Orchestration is disabled, skipping this cycle", {
         executionId,
       });
       return null;
     }
 
-    logger.verbose("Starting job orchestration cycle", { executionId });
+    logger.debug("Starting job orchestration cycle", { executionId });
 
     // 2. Try to acquire orchestrator lock to prevent concurrent execution
     const lockResult = await acquireOrchestratorLock({ logger, executionId });
 
     if (!lockResult.success) {
-      logger.verbose(
+      logger.debug(
         "Another orchestrator instance is already running, skipping this cycle",
         {
           executionId,
@@ -126,14 +126,14 @@ const businessLogic = async ({ logger, errorHandler, uniqueId }) => {
       }
 
       if (jobsToRun.length === 0) {
-        logger.verbose("No jobs to run this cycle", {
+        logger.debug("No jobs to run this cycle", {
           executionId,
           orchestratorExecutionId,
         });
         return null;
       }
 
-      logger.verbose(`Found ${jobsToRun.length} jobs to run`, {
+      logger.debug(`Found ${jobsToRun.length} jobs to run`, {
         executionId,
         orchestratorExecutionId,
         jobs: jobsToRun.map((j) => j.jobName),
@@ -143,7 +143,7 @@ const businessLogic = async ({ logger, errorHandler, uniqueId }) => {
       const maxConcurrency = parseInt(process.env.MAX_JOB_CONCURRENCY || "1");
       const executionPromises = [];
 
-      logger.verbose(
+      logger.debug(
         `Executing ${jobsToRun.length} jobs in parallel: ${maxConcurrency}`
       );
 
@@ -154,9 +154,7 @@ const businessLogic = async ({ logger, errorHandler, uniqueId }) => {
         );
       }
 
-      logger.verbose(
-        `Waiting for ${executionPromises.length} jobs to complete`
-      );
+      logger.debug(`Waiting for ${executionPromises.length} jobs to complete`);
 
       // // Wait for all job invocations to complete
       const results = await Promise.allSettled(executionPromises);
@@ -173,7 +171,7 @@ const businessLogic = async ({ logger, errorHandler, uniqueId }) => {
       const successful = results.filter((r) => r.status === "fulfilled").length;
       const failed = results.filter((r) => r.status === "rejected").length;
 
-      logger.verbose("Job orchestration cycle completed", {
+      logger.debug("Job orchestration cycle completed", {
         executionId,
         orchestratorExecutionId,
         totalJobs: jobsToRun.length,
@@ -213,7 +211,7 @@ async function executeJob(job, orchestrationExecutionId, logger) {
     const markResult = await tryMarkJobRunning(jobName, jobExecutionId, logger);
 
     if (!markResult.success) {
-      logger.info(`Job already running, skipping execution`, {
+      logger.debug(`Job already running, skipping execution`, {
         jobName,
         jobExecutionId,
         orchestrationExecutionId,
@@ -242,7 +240,7 @@ async function executeJob(job, orchestrationExecutionId, logger) {
 
     // 4. Invoke the worker Lambda function synchronously
     // console.log("Invoking worker function synchronously", job.targetFunction);
-    logger.info(`🔥 CRITICAL: Orchestrator invoking worker function`, {
+    logger.debug(`🔥 CRITICAL: Orchestrator invoking worker function`, {
       jobName,
       targetFunction: job.targetFunction,
       jobExecutionId,
@@ -257,7 +255,7 @@ async function executeJob(job, orchestrationExecutionId, logger) {
       lambda
     );
 
-    logger.info(`✅ Worker function invocation completed`, {
+    logger.debug(`✅ Worker function invocation completed`, {
       jobName,
       targetFunction: job.targetFunction,
       jobExecutionId,

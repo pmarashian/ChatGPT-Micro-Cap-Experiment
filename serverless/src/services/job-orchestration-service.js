@@ -121,6 +121,32 @@ function shouldRunJob(job) {
 /**
  * Get all enabled jobs that need to run
  */
+async function getAllJobs() {
+  const dynamo = createDynamoClient();
+  const tableName = getJobTableName();
+
+  try {
+    // Query enabled jobs using GSI (efficient, but eventually consistent)
+    const result = await dynamo.send(
+      new QueryCommand({
+        TableName: tableName,
+        IndexName: "TickerIndex",
+        KeyConditionExpression: "GSI1PK = :gsi1pk",
+        ExpressionAttributeValues: {
+          ":gsi1pk": "JOB#enabled",
+        },
+      })
+    );
+
+    return result.Items || [];
+  } catch (error) {
+    console.log("Error querying jobs:", error.message);
+  }
+}
+
+/**
+ * Get all enabled jobs that need to run
+ */
 async function getJobsToRun(logger) {
   const dynamo = createDynamoClient();
   const tableName = getJobTableName();
@@ -140,7 +166,7 @@ async function getJobsToRun(logger) {
 
     const jobs = result.Items || [];
 
-    logger.verbose(`Current time: ${new Date().toISOString()}`);
+    logger.debug(`Current time: ${new Date().toISOString()}`);
 
     // Filter jobs that should run
     const jobsToRun = jobs.filter(shouldRunJob);
@@ -1046,4 +1072,5 @@ module.exports = {
   cleanupExpiredLocks,
   isOrchestrationEnabled,
   setOrchestrationEnabled,
+  getAllJobs,
 };

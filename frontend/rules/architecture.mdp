@@ -1,0 +1,174 @@
+# Frontend Architecture Rules
+
+## Component Architecture
+
+### Server Components (app/*.tsx)
+**Purpose**: Handle data fetching and initial rendering
+**Location**: `src/app/` directory
+**Characteristics**:
+- Run on server during build/request time
+- Can use Node.js APIs (fs, database connections)
+- Cannot use browser APIs (localStorage, window)
+- Cannot use React hooks (useState, useEffect)
+
+**Use for**:
+- Page components that need server-side data
+- Data fetching from databases
+- Authentication checks
+- Redirects and routing logic
+
+### Client Components (components/*.tsx)
+**Purpose**: Handle user interactions and dynamic UI
+**Location**: `src/components/` directory
+**Characteristics**:
+- Run in browser
+- Can use React hooks and browser APIs
+- Cannot directly access server resources
+- Receive data via props
+
+**Use for**:
+- Interactive UI components
+- Forms and user input
+- Real-time updates
+- Browser-specific functionality
+
+## Data Flow Pattern
+
+### 1. Server Component Fetches Data
+```typescript
+// app/dashboard/page.tsx
+export default async function DashboardPage() {
+  // Direct database call
+  const portfolioService = new PortfolioService();
+  const portfolio = await portfolioService.getCurrentPortfolio();
+
+  return <DashboardContent portfolio={portfolio} />;
+}
+```
+
+### 2. Client Component Receives Data
+```typescript
+// components/dashboard-content.tsx
+interface DashboardContentProps {
+  portfolio: PortfolioData;
+}
+
+export function DashboardContent({ portfolio }: DashboardContentProps) {
+  // Use data from props, no fetching needed
+  return <div>Total Value: ${portfolio.totalValue}</div>;
+}
+```
+
+## Import Strategy
+
+### Serverless Imports
+Always use relative paths to import serverless services:
+```typescript
+// ✅ Correct
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+
+// ❌ Avoid
+import { PortfolioService } from "../../../serverless/src/services/portfolio-service";
+```
+
+### Frontend Imports
+Use standard TypeScript imports for frontend code:
+```typescript
+// ✅ Correct
+import { useState } from "react";
+import { DashboardContent } from "@/components/dashboard-content";
+
+// ❌ Avoid
+const { useState } = require("react");
+```
+
+## Error Boundaries
+
+### Database Errors
+Handle database connection issues gracefully:
+```typescript
+export default async function DashboardPage() {
+  let portfolio = { totalValue: 0, positions: [] };
+
+  try {
+    const portfolioService = new PortfolioService();
+    portfolio = await portfolioService.getCurrentPortfolio();
+  } catch (error) {
+    console.error("Database error:", error);
+    // Continue with default data
+  }
+
+  return <DashboardContent portfolio={portfolio} />;
+}
+```
+
+### Component Errors
+Use error boundaries for client components:
+```typescript
+// components/error-boundary.tsx
+export class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("Component error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div>Something went wrong.</div>;
+    }
+    return this.props.children;
+  }
+}
+```
+
+## State Management
+
+### Server State
+- Use direct database calls in server components
+- Pass data as props to client components
+- No client-side state management for server data
+
+### Client State
+- Use React hooks (useState, useReducer) for UI state
+- Use context for shared state between components
+- Consider Zustand or Redux for complex state
+
+## Performance Considerations
+
+### Server-Side Rendering
+- Keep server components fast (database queries should be optimized)
+- Use React.Suspense for loading states
+- Implement proper caching strategies
+
+### Bundle Size
+- Import only what you need from serverless services
+- Use dynamic imports for large components
+- Tree-shake unused code
+
+## Testing Strategy
+
+### Server Components
+- Test database interactions
+- Test authentication logic
+- Test error handling
+
+### Client Components
+- Test user interactions
+- Test state changes
+- Test prop handling
+
+## Development Workflow
+
+1. **New Feature**: Determine if it needs server or client rendering
+2. **Data Requirements**: Choose between direct DB calls or API routes
+3. **Component Creation**: Create appropriate server/client components
+4. **Data Flow**: Ensure proper prop passing and state management
+5. **Error Handling**: Add appropriate error boundaries and fallbacks

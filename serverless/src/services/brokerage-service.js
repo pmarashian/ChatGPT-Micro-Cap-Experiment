@@ -362,7 +362,7 @@ class BrokerageService {
       const assetInfo = await this.getAssetInfo(symbol);
       return assetInfo.tradable === true;
     } catch (error) {
-      this.logger.warn(
+      this.logger.debug(
         `Could not verify tradability for ${symbol}, assuming not tradable: ${error.message}`
       );
       return false; // Default to false for safety

@@ -516,7 +516,7 @@ class PortfolioService {
             this.logger.warn(`Invalid price data for ${position.ticker}`);
           }
         } else {
-          this.logger.warn(`No market data available for ${position.ticker}`, {
+          this.logger.debug(`No market data available for ${position.ticker}`, {
             source: tickerData?.source,
             hasData: tickerData?.data?.length > 0,
           });

@@ -102,7 +102,7 @@ class MarketDataService {
         };
       }
 
-      this.logger.warn(`No data available for ${ticker} from any source`);
+      this.logger.debug(`No data available for ${ticker} from any source`);
       return {
         source: "empty",
         data: [],

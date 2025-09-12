@@ -1,0 +1,158 @@
+# Data Fetching Rules for Frontend
+
+## Core Principle
+**Static data should use direct database calls, not HTTP API requests.**
+
+## When to Use Direct Database Calls
+Use direct database calls (importing serverless services) for:
+- Portfolio data
+- User profile information
+- Static configuration data
+- Historical data that doesn't change frequently
+- Data needed for initial page render
+
+## When to Use API Calls
+Use HTTP API calls for:
+- User actions (form submissions, button clicks)
+- Real-time data updates
+- Dynamic data that changes based on user input
+- Operations that require authentication/authorization
+
+## Implementation Pattern
+
+### ✅ CORRECT: Server Component with Direct Database Call
+```typescript
+// app/dashboard/page.tsx
+import { getServerSession } from "next-auth";
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+
+export default async function DashboardPage() {
+  const session = await getServerSession(authOptions);
+
+  // Direct database call - NO API REQUEST
+  const portfolioService = new PortfolioService();
+  const portfolio = await portfolioService.getCurrentPortfolio();
+
+  return (
+    <DashboardContent
+      portfolioData={portfolio}
+    />
+  );
+}
+```
+
+### ❌ INCORRECT: Server Component with API Call
+```typescript
+// app/dashboard/page.tsx - DON'T DO THIS
+export default async function DashboardPage() {
+  // API call in server component - BAD
+  const response = await fetch('http://localhost:3001/api/portfolio');
+  const portfolio = await response.json();
+
+  return <DashboardContent portfolioData={portfolio} />;
+}
+```
+
+### ❌ INCORRECT: Client Component with API Call
+```typescript
+// components/Dashboard.tsx - DON'T DO THIS
+export function Dashboard() {
+  const [portfolio, setPortfolio] = useState([]);
+
+  useEffect(() => {
+    // Client-side API call - BAD for static data
+    fetch('/api/portfolio')
+      .then(res => res.json())
+      .then(setPortfolio);
+  }, []);
+
+  return <div>...</div>;
+}
+```
+
+## Import Patterns
+
+### Serverless Service Imports
+```typescript
+// ✅ Correct import pattern
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+const TradingService = require("../../../../serverless/src/services/trading-service");
+const MarketDataService = require("../../../../serverless/src/services/market-data-service");
+```
+
+### Utility Imports
+```typescript
+const Logger = require("../../../../serverless/src/utils/logger");
+const ErrorHandler = require("../../../../serverless/src/utils/error-handler");
+const Validators = require("../../../../serverless/src/utils/validators");
+```
+
+## Error Handling Pattern
+
+```typescript
+export default async function DashboardPage() {
+  let portfolioData = { totalValue: 0, positions: [] };
+
+  try {
+    const portfolioService = new PortfolioService();
+    const portfolio = await portfolioService.getCurrentPortfolio();
+    portfolioData = portfolio;
+  } catch (error) {
+    console.error("Database error:", error);
+    // Continue with fallback data
+  }
+
+  return <DashboardContent portfolioData={portfolioData} />;
+}
+```
+
+## File Structure Guidelines
+
+```
+frontend/
+├── app/
+│   ├── dashboard/
+│   │   └── page.tsx          # Server component with DB calls
+│   ├── portfolio/
+│   │   └── page.tsx          # Server component with DB calls
+│   └── api/                  # Only for dynamic operations
+│       └── user-action/
+│           └── route.ts      # API routes for user actions only
+├── components/
+│   ├── dashboard/
+│   │   └── dashboard-content.tsx  # Client component receiving props
+│   └── ui/                  # Pure UI components
+└── serverless/              # Shared business logic
+    ├── src/
+    │   ├── services/        # Business logic services
+    │   ├── utils/           # Utility functions
+    │   └── config/          # Configuration
+```
+
+## Migration Checklist
+
+When adding new data requirements:
+
+1. **Is this static data?** (portfolio, user profile, historical data)
+   - Yes → Use direct database call in server component
+   - No → Use API route for dynamic operations
+
+2. **Does this need real-time updates?**
+   - Yes → Consider API with WebSocket/polling
+   - No → Direct database call is fine
+
+3. **Will users interact with this data?**
+   - Yes → API route for mutations, direct DB for reads
+   - No → Direct database call
+
+4. **Is this needed for SEO/initial render?**
+   - Yes → Server component with direct DB call
+   - No → Client component with API call
+
+## Benefits of This Approach
+
+- **Performance**: No HTTP overhead for static data
+- **SEO**: Data available during server-side rendering
+- **Reliability**: No dependency on API server availability
+- **Maintainability**: Single source of truth for business logic
+- **Developer Experience**: Clear patterns for data fetching

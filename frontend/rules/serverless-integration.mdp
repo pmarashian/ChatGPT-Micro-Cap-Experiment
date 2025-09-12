@@ -1,0 +1,264 @@
+# Serverless Integration Rules
+
+## Import Patterns
+
+### Correct Serverless Imports
+Always use `require()` with relative paths for serverless imports:
+```typescript
+// ✅ CORRECT - Serverless service imports
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+const TradingService = require("../../../../serverless/src/services/trading-service");
+const MarketDataService = require("../../../../serverless/src/services/market-data-service");
+
+// ✅ CORRECT - Serverless utility imports
+const Logger = require("../../../../serverless/src/utils/logger");
+const ErrorHandler = require("../../../../serverless/src/utils/error-handler");
+const Validators = require("../../../../serverless/src/utils/validators");
+
+// ✅ CORRECT - Serverless config imports
+const { DYNAMODB_TABLES } = require("../../../../serverless/src/config/constants");
+const { getEnvConfig } = require("../../../../serverless/src/config/environment");
+```
+
+### Incorrect Imports
+Avoid ES6 imports for serverless code:
+```typescript
+// ❌ AVOID - ES6 imports don't work with serverless Node.js code
+import { PortfolioService } from "../../../../serverless/src/services/portfolio-service";
+
+// ❌ AVOID - Relative path issues
+const PortfolioService = require("../../../../../serverless/src/services/portfolio-service");
+```
+
+## Service Usage Patterns
+
+### Portfolio Service
+```typescript
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+
+export default async function PortfolioPage() {
+  const portfolioService = new PortfolioService();
+
+  try {
+    const portfolio = await portfolioService.getCurrentPortfolio();
+    return <PortfolioView data={portfolio} />;
+  } catch (error) {
+    console.error("Portfolio fetch error:", error);
+    return <PortfolioView data={{ totalValue: 0, positions: [] }} />;
+  }
+}
+```
+
+### Trading Service
+```typescript
+const TradingService = require("../../../../serverless/src/services/trading-service");
+
+export default async function TradingPage() {
+  const tradingService = new TradingService();
+
+  try {
+    const trades = await tradingService.getRecentTrades();
+    return <TradingView trades={trades} />;
+  } catch (error) {
+    console.error("Trading fetch error:", error);
+    return <TradingView trades={[]} />;
+  }
+}
+```
+
+### Market Data Service
+```typescript
+const MarketDataService = require("../../../../serverless/src/services/market-data-service");
+
+export default async function MarketPage() {
+  const marketDataService = new MarketDataService();
+
+  try {
+    const marketData = await marketDataService.getMarketOverview();
+    return <MarketView data={marketData} />;
+  } catch (error) {
+    console.error("Market data fetch error:", error);
+    return <MarketView data={{}} />;
+  }
+}
+```
+
+## Environment Configuration
+
+### Accessing Serverless Environment
+```typescript
+const { getEnvConfig } = require("../../../../serverless/src/config/environment");
+
+export default async function ConfiguredPage() {
+  const envConfig = getEnvConfig();
+
+  // Now you have access to all serverless environment variables
+  const aiProvider = envConfig.aiProvider;
+  const tradingMode = envConfig.executeTrades ? "live" : "simulation";
+
+  return <ConfigView aiProvider={aiProvider} tradingMode={tradingMode} />;
+}
+```
+
+## Error Handling
+
+### Database Connection Errors
+```typescript
+const ErrorHandler = require("../../../../serverless/src/utils/error-handler");
+
+export default async function DataPage() {
+  const errorHandler = new ErrorHandler("frontend-data-page");
+
+  try {
+    const service = new SomeService();
+    const data = await service.getData();
+    return <DataView data={data} />;
+  } catch (error) {
+    // Log error using serverless logger
+    console.error("Data fetch error:", error);
+
+    // Return error response using serverless error handler
+    return errorHandler.createErrorResponse(error);
+  }
+}
+```
+
+## Logging
+
+### Using Serverless Logger
+```typescript
+const Logger = require("../../../../serverless/src/utils/logger");
+
+export default async function LoggedPage() {
+  const logger = new Logger("frontend-logged-page");
+
+  try {
+    logger.info("Starting data fetch");
+    const service = new SomeService();
+    const data = await service.getData();
+    logger.info("Data fetch completed", { count: data.length });
+
+    return <DataView data={data} />;
+  } catch (error) {
+    logger.error("Data fetch failed", error);
+    return <ErrorView />;
+  }
+}
+```
+
+## Validation
+
+### Using Serverless Validators
+```typescript
+const Validators = require("../../../../serverless/src/utils/validators");
+
+export default async function ValidatedPage() {
+  const validators = new Validators();
+
+  // Validate input data
+  const isValid = validators.validatePortfolioData(inputData);
+
+  if (!isValid) {
+    return <ValidationError />;
+  }
+
+  // Proceed with valid data
+  const service = new PortfolioService();
+  const result = await service.updatePortfolio(inputData);
+
+  return <SuccessView result={result} />;
+}
+```
+
+## Constants and Configuration
+
+### Using Serverless Constants
+```typescript
+const { DYNAMODB_TABLES, ITEM_TYPES } = require("../../../../serverless/src/config/constants");
+
+export default async function ConstantsPage() {
+  // Access table names
+  const tradingTable = DYNAMODB_TABLES.TRADING_TABLE;
+
+  // Access item types
+  const portfolioType = ITEM_TYPES.PORTFOLIO;
+
+  // Use in service calls
+  const service = new PortfolioService();
+  const data = await service.getItemsByType(portfolioType);
+
+  return <ConstantsView data={data} />;
+}
+```
+
+## Best Practices
+
+### 1. Import Organization
+Group imports by type:
+```typescript
+// Services
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+const TradingService = require("../../../../serverless/src/services/trading-service");
+
+// Utilities
+const Logger = require("../../../../serverless/src/utils/logger");
+const ErrorHandler = require("../../../../serverless/src/utils/error-handler");
+
+// Configuration
+const { getEnvConfig } = require("../../../../serverless/src/config/environment");
+const { DYNAMODB_TABLES } = require("../../../../serverless/src/config/constants");
+```
+
+### 2. Error Handling
+Always wrap serverless service calls in try-catch:
+```typescript
+try {
+  const service = new Service();
+  const data = await service.method();
+  return <SuccessView data={data} />;
+} catch (error) {
+  console.error("Service error:", error);
+  return <FallbackView />;
+}
+```
+
+### 3. Fallback Data
+Provide meaningful fallback data when services fail:
+```typescript
+let data = { items: [], total: 0 }; // Default structure
+
+try {
+  const service = new Service();
+  data = await service.getData();
+} catch (error) {
+  console.error("Service failed:", error);
+  // Keep default data structure
+}
+
+return <DataView data={data} />;
+```
+
+### 4. Type Safety
+Create TypeScript interfaces for serverless data:
+```typescript
+interface PortfolioData {
+  totalValue: number;
+  positions: Position[];
+  lastUpdated: string;
+}
+
+interface Position {
+  symbol: string;
+  shares: number;
+  avgPrice: number;
+  currentPrice: number;
+}
+```
+
+## Common Mistakes to Avoid
+
+- ❌ Using ES6 imports for serverless code
+- ❌ Not handling service errors gracefully
+- ❌ Missing fallback data structures
+- ❌ Inconsistent import paths
+- ❌ Not using serverless logging utilities

@@ -1313,7 +1313,7 @@ class AIMemoryService {
       };
 
       await this.dynamodb.send(new PutCommand(params));
-      this.logger.verbose(
+      this.logger.debug(
         `Saved ranked universe snapshot: ${snapshot.id} (${
           snapshot.totalTickers
         } tickers) - Table: ${this.tableName} Region: ${

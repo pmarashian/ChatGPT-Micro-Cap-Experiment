@@ -1,0 +1,132 @@
+# Frontend Cursor Rules
+
+# This project uses Next.js with serverless backend integration
+
+## DATA FETCHING PATTERNS
+
+### ✅ CORRECT: Server Components with API Calls to Next.js App
+
+For static/portfolio data that doesn't change frequently:
+
+- Server components make HTTP calls to Next.js app's own API routes
+- API routes import serverless services and handle database calls
+- Clean separation between UI and business logic
+- Example: Server component calls /api/portfolio
+
+```typescript
+// ✅ CORRECT - Server component calls Next.js API route
+import { getServerSession } from "next-auth";
+import { redirect } from "next/navigation";
+
+export default async function DashboardPage() {
+  const response = await fetch(`${process.env.NEXTAUTH_URL}/api/portfolio`);
+  const portfolio = await response.json();
+  // ... rest of component
+}
+```
+
+```typescript
+// ✅ CORRECT - API route imports serverless function
+// app/api/portfolio/route.ts
+import { NextResponse } from "next/server";
+const PortfolioService = require("../../../../../serverless/src/services/portfolio-service");
+
+export async function GET() {
+  const portfolioService = new PortfolioService();
+  const portfolio = await portfolioService.getCurrentPortfolio();
+  return NextResponse.json(portfolio);
+}
+```
+
+### ❌ AVOID: Client-Side API Calls
+
+Do NOT make client-side API calls for static data:
+
+```typescript
+// ❌ AVOID - Client-side API calls
+const [portfolio, setPortfolio] = useState([]);
+useEffect(() => {
+  fetch("/api/portfolio") // DON'T DO THIS
+    .then((res) => res.json())
+    .then(setPortfolio);
+}, []);
+```
+
+### ❌ AVOID: Direct Serverless Imports in Components
+
+Do NOT import serverless services directly in React components:
+
+```typescript
+// ❌ AVOID - Direct serverless imports in components
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+
+export default async function DashboardPage() {
+  const portfolioService = new PortfolioService();
+  const portfolio = await portfolioService.getCurrentPortfolio(); // DON'T DO THIS
+}
+```
+
+## ARCHITECTURE PRINCIPLES
+
+### 1. Data Layer Separation
+
+- **Static Data**: Server components → Next.js API routes → Serverless services → Database
+- **Dynamic Data**: Client components → Next.js API routes → Serverless services → Database
+- **Business Logic**: Import from serverless/src/services/ (ONLY in API routes)
+
+### 2. Import Patterns
+
+- Serverless services: `require("../../../../../serverless/src/services/...")` (ONLY in API routes)
+- Serverless utils: `require("../../../../../serverless/src/utils/...")` (ONLY in API routes)
+- Serverless config: `require("../../../../../serverless/src/config/...")` (ONLY in API routes)
+
+### 3. Error Handling
+
+- Always wrap database calls in try-catch blocks
+- Provide fallback data when database is unavailable
+- Log errors appropriately
+
+## FILE ORGANIZATION
+
+### Server Components (app/\*.tsx)
+
+- Use for pages that need server-side data fetching
+- Import serverless services directly
+- Handle authentication and redirects
+
+### Client Components (components/\*.tsx)
+
+- Use for interactive UI components
+- Receive data as props from server components
+- Handle user interactions and state management
+
+### API Routes (app/api/\*.ts)
+
+- Use for ALL data operations (static AND dynamic)
+- Server components call these API routes
+- API routes import serverless services and handle database calls
+- Keep API routes thin - delegate business logic to serverless services
+
+## DEVELOPMENT WORKFLOW
+
+1. **For new data requirements**: Create Next.js API route first
+2. **API routes**: Import serverless services and handle database calls
+3. **Server components**: Call Next.js API routes (not serverless directly)
+4. **Client components**: Receive data as props from server components
+5. **Pattern**: Server Component → Next.js API Route → Serverless Service → Database
+
+## COMMON MISTAKES TO AVOID
+
+- ❌ Direct serverless imports in React components
+- ❌ `useEffect` for initial data loading in client components
+- ❌ Client-side data fetching for static data
+- ❌ Server components making external API calls
+- ❌ Not handling database connection errors in API routes
+
+## BEST PRACTICES
+
+- ✅ Import serverless services ONLY in Next.js API routes
+- ✅ Server components call Next.js API routes (internal HTTP calls)
+- ✅ API routes handle all database operations and business logic
+- ✅ Pass data as props from server to client components
+- ✅ Handle errors gracefully with fallbacks in API routes

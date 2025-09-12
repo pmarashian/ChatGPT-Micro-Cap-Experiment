@@ -1,0 +1,303 @@
+# Development Workflow Rules
+
+## Decision Tree: Data Fetching Strategy
+
+### Step 1: Identify Data Requirements
+Ask these questions to determine the best approach:
+
+1. **Is this static data?** (portfolio, user profile, historical data)
+   - Yes → Direct database call in server component
+   - No → API route for dynamic operations
+
+2. **Does this data change frequently?**
+   - Yes → Consider API with real-time updates
+   - No → Direct database call is fine
+
+3. **Is this needed for initial page render/SEO?**
+   - Yes → Server component with direct DB call
+   - No → Client component with API call
+
+4. **Will users interact with this data?**
+   - Yes → API route for mutations, direct DB for reads
+   - No → Direct database call
+
+5. **Is this user-specific data?**
+   - Yes → Include authentication checks
+   - No → Public data, simpler fetching
+
+## Implementation Checklist
+
+### For New Server Components (app/*.tsx)
+
+#### ✅ Required Steps:
+- [ ] Import serverless service using `require()` with correct relative path
+- [ ] Create service instance in server component
+- [ ] Wrap service call in try-catch block
+- [ ] Provide fallback data for error cases
+- [ ] Pass data as props to client components
+- [ ] Add TypeScript interfaces for type safety
+
+#### Example Implementation:
+```typescript
+// ✅ CORRECT IMPLEMENTATION
+import { getServerSession } from "next-auth";
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+
+interface PortfolioPageProps {
+  portfolio: {
+    totalValue: number;
+    positions: Array<{
+      symbol: string;
+      shares: number;
+      currentPrice: number;
+    }>;
+  };
+}
+
+export default async function PortfolioPage() {
+  const session = await getServerSession(authOptions);
+
+  let portfolio = { totalValue: 0, positions: [] };
+
+  try {
+    const portfolioService = new PortfolioService();
+    portfolio = await portfolioService.getCurrentPortfolio();
+  } catch (error) {
+    console.error("Portfolio fetch error:", error);
+    // Continue with fallback data
+  }
+
+  return <PortfolioContent portfolio={portfolio} />;
+}
+```
+
+### For New Client Components (components/*.tsx)
+
+#### ✅ Required Steps:
+- [ ] Accept data as props from server components
+- [ ] Use React hooks for local UI state only
+- [ ] Avoid direct data fetching
+- [ ] Handle loading/error states from props
+- [ ] Use TypeScript interfaces for props
+
+#### Example Implementation:
+```typescript
+// ✅ CORRECT IMPLEMENTATION
+interface PortfolioContentProps {
+  portfolio: {
+    totalValue: number;
+    positions: Array<{
+      symbol: string;
+      shares: number;
+      currentPrice: number;
+    }>;
+  };
+}
+
+export function PortfolioContent({ portfolio }: PortfolioContentProps) {
+  // No data fetching here - data comes from props
+  return (
+    <div>
+      <h1>Total Value: ${portfolio.totalValue}</h1>
+      {portfolio.positions.map(position => (
+        <div key={position.symbol}>
+          {position.symbol}: {position.shares} shares
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+## Code Review Checklist
+
+### Architecture Review
+- [ ] Server components use direct database calls for static data
+- [ ] Client components receive data via props only
+- [ ] No client-side API calls for initial data loading
+- [ ] Error handling includes appropriate fallbacks
+- [ ] Authentication checks in server components where needed
+
+### Import Review
+- [ ] Serverless imports use `require()` with correct relative paths
+- [ ] No ES6 imports for serverless services
+- [ ] Frontend imports use standard TypeScript imports
+- [ ] Unused imports are removed
+
+### Performance Review
+- [ ] Database calls are optimized (no N+1 queries)
+- [ ] Large datasets are properly paginated
+- [ ] Bundle size is monitored
+- [ ] Server components don't block rendering unnecessarily
+
+### Security Review
+- [ ] Authentication checks are in place for protected data
+- [ ] Input validation is implemented
+- [ ] Error messages don't leak sensitive information
+- [ ] Database credentials are properly secured
+
+## Common Anti-Patterns
+
+### ❌ Anti-Pattern 1: Client-Side Data Fetching
+```typescript
+// DON'T DO THIS
+export function Dashboard() {
+  const [portfolio, setPortfolio] = useState([]);
+
+  useEffect(() => {
+    fetch('/api/portfolio') // ❌ Client-side API call
+      .then(res => res.json())
+      .then(setPortfolio);
+  }, []);
+
+  return <div>...</div>;
+}
+```
+
+### ❌ Anti-Pattern 2: Server-Side API Calls
+```typescript
+// DON'T DO THIS
+export default async function DashboardPage() {
+  const response = await fetch('http://localhost:3001/api/portfolio'); // ❌ HTTP call in server component
+  const portfolio = await response.json();
+
+  return <DashboardContent portfolio={portfolio} />;
+}
+```
+
+### ❌ Anti-Pattern 3: Wrong Import Pattern
+```typescript
+// DON'T DO THIS
+import { PortfolioService } from "../../../../serverless/src/services/portfolio-service"; // ❌ ES6 import
+
+export default async function DashboardPage() {
+  const portfolioService = new PortfolioService(); // ❌ Won't work
+}
+```
+
+## Refactoring Guide
+
+### Converting from API Calls to Direct DB Calls
+
+#### Step 1: Identify API Routes to Remove
+Look for API routes that only fetch static data:
+```
+app/api/portfolio/route.ts     → Remove, use direct DB call
+app/api/user-profile/route.ts  → Remove, use direct DB call
+app/api/config/route.ts        → Remove, use direct DB call
+```
+
+#### Step 2: Update Server Components
+Replace API calls with direct database calls:
+```typescript
+// Before
+const response = await fetch('/api/portfolio');
+const portfolio = await response.json();
+
+// After
+const PortfolioService = require("../../../../serverless/src/services/portfolio-service");
+const portfolioService = new PortfolioService();
+const portfolio = await portfolioService.getCurrentPortfolio();
+```
+
+#### Step 3: Update Client Components
+Remove data fetching logic, receive data as props:
+```typescript
+// Before
+export function DashboardContent() {
+  const [portfolio, setPortfolio] = useState([]);
+  // ... fetching logic
+
+  return <div>...</div>;
+}
+
+// After
+interface DashboardContentProps {
+  portfolio: PortfolioData;
+}
+
+export function DashboardContent({ portfolio }: DashboardContentProps) {
+  // No fetching logic needed
+  return <div>...</div>;
+}
+```
+
+## Performance Optimization
+
+### Database Query Optimization
+- Use appropriate DynamoDB indexes
+- Implement query pagination for large datasets
+- Cache frequently accessed data
+- Use parallel queries when possible
+
+### Bundle Size Optimization
+- Import only necessary serverless services
+- Use dynamic imports for large components
+- Tree-shake unused utilities
+- Monitor bundle size with build tools
+
+### Rendering Optimization
+- Use React.Suspense for loading states
+- Implement proper error boundaries
+- Memoize expensive computations
+- Use React.lazy for code splitting
+
+## Testing Strategy
+
+### Server Component Testing
+```typescript
+describe('DashboardPage', () => {
+  it('fetches portfolio data from database', async () => {
+    // Mock database service
+    const mockPortfolio = { totalValue: 1000, positions: [] };
+
+    // Test server component
+    const component = await DashboardPage();
+    expect(component.props.portfolio).toEqual(mockPortfolio);
+  });
+});
+```
+
+### Client Component Testing
+```typescript
+describe('DashboardContent', () => {
+  it('renders portfolio data from props', () => {
+    const portfolio = { totalValue: 1000, positions: [] };
+    render(<DashboardContent portfolio={portfolio} />);
+
+    expect(screen.getByText('$1000')).toBeInTheDocument();
+  });
+});
+```
+
+## Deployment Considerations
+
+### Environment Variables
+- Ensure serverless environment variables are available
+- Configure database connection strings
+- Set up proper AWS credentials for production
+
+### Build Optimization
+- Optimize serverless service imports
+- Minimize bundle size
+- Configure proper caching headers
+- Set up CDN for static assets
+
+## Troubleshooting
+
+### Common Issues
+
+**Issue**: "Cannot find module" for serverless imports
+**Solution**: Check relative path and ensure serverless directory exists
+
+**Issue**: Database connection errors
+**Solution**: Verify AWS credentials and DynamoDB table permissions
+
+**Issue**: Type errors with serverless services
+**Solution**: Create TypeScript interfaces for service return types
+
+**Issue**: Performance issues with large datasets
+**Solution**: Implement pagination and optimize queries
+
+**Issue**: Authentication not working
+**Solution**: Ensure NextAuth is properly configured in server components
