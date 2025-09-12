@@ -71,7 +71,7 @@ const businessLogic = async ({ logger, errorHandler }) => {
     },
     {
       jobName: "dailyTrading",
-      schedule: "0 20 * * ?", // 4 PM ET (9 PM UTC)
+      schedule: "0 20 * * MON-FRI", // 4 PM ET (9 PM UTC), Monday through Friday
       timezone: "America/New_York",
       targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-dailyTradingWorker`,
       maxRuntime: 180, // 3 minutes
@@ -81,7 +81,7 @@ const businessLogic = async ({ logger, errorHandler }) => {
     },
     {
       jobName: "portfolioUpdate",
-      schedule: "30 20 * * ?", // 4:30 PM ET (9:30 PM UTC)
+      schedule: "30 13 * * ?", // 1:30 PM ET (5:30 PM UTC)
       timezone: "America/New_York",
       targetFunction: `${process.env.SERVICE_NAME}-${process.env.STAGE}-portfolioUpdateWorker`,
       maxRuntime: 300, // 5 minutes
