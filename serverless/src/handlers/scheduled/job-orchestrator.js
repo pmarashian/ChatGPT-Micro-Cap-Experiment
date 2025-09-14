@@ -277,7 +277,7 @@ async function executeJob(job, orchestrationExecutionId, logger) {
       const orchInfo = result._orchestration;
       await completeJobExecution(jobName, jobExecutionId, true, null, logger);
 
-      logger.info(`Job completed successfully via centralized orchestration`, {
+      logger.debug(`Job completed successfully via centralized orchestration`, {
         jobName,
         jobExecutionId,
         orchestrationExecutionId,

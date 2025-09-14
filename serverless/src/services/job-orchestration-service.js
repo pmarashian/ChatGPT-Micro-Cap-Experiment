@@ -232,7 +232,7 @@ async function tryMarkJobRunning(jobName, executionId, logger) {
       })
     );
 
-    logger.info(`Successfully marked job as running`, {
+    logger.debug(`Successfully marked job as running`, {
       jobName,
       executionId,
     });
@@ -925,7 +925,7 @@ async function completeJobExecution(
     // Update next run time for completed or failed jobs
     await updateNextRunTime(jobName);
 
-    logger.info(`Job ${status} and next run time updated`, {
+    logger.debug(`Job ${status} and next run time updated`, {
       jobName,
       executionId,
       status,

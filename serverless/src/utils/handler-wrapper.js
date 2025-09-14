@@ -305,7 +305,7 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
     const executionId = event?.executionId;
 
     if (isOrchestrationTrigger && executionId) {
-      logger.info("Job triggered by orchestrator", {
+      logger.debug("Job triggered by orchestrator", {
         executionId,
         orchestrationExecutionId: event.orchestrationExecutionId,
         jobName: event.jobConfig?.jobName,
@@ -333,7 +333,7 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
       // For orchestration-triggered jobs, include completion info in response
       // The orchestrator will handle status updates centrally
       if (isOrchestrationTrigger && executionId && jobName) {
-        logger.info("Job business logic completed successfully", {
+        logger.debug("Job business logic completed successfully", {
           executionId,
           jobName,
           orchestrationExecutionId: event.orchestrationExecutionId,
@@ -359,8 +359,6 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
 
       return result;
     } catch (error) {
-      logger.error(`${handlerName} failed`, error);
-
       // For orchestration-triggered jobs, include failure info in response
       // The orchestrator will handle status updates centrally
       if (isOrchestrationTrigger && executionId && jobName) {
@@ -396,7 +394,9 @@ function withJobOrchestratedHandlerLifecycle(businessLogic, options = {}) {
           operation: operation,
         });
       } catch (alertError) {
-        logger.error("Failed to send error alert", alertError);
+        logger.error("Failed to send error alert", {
+          error: alertError.message,
+        });
       }
 
       // Log function end with error

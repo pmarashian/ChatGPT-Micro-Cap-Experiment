@@ -36,7 +36,7 @@ async function performPortfolioUpdate(options = {}) {
     const brokerageService = new BrokerageService();
 
     // 1. Get current portfolio from Alpaca (source of truth)
-    logInstance.info("Fetching current portfolio from Alpaca");
+    logInstance.debug("Fetching current portfolio from Alpaca");
     const alpacaPositions = await brokerageService.getPortfolio();
     const alpacaAccount = await brokerageService.getAccountInfo();
 
@@ -67,11 +67,11 @@ async function performPortfolioUpdate(options = {}) {
     }
 
     // 2. Get local portfolio to preserve cost basis and stop losses
-    logInstance.info("Fetching local portfolio data");
+    logInstance.debug("Fetching local portfolio data");
     const localPortfolio = await portfolioService.getCurrentPortfolio();
 
     // 3. Merge Alpaca data with local data (preserve cost basis, stop losses, etc.)
-    logInstance.info("Merging Alpaca data with local portfolio");
+    logInstance.debug("Merging Alpaca data with local portfolio");
     const mergedPortfolio = await portfolioService.syncWithBrokerageData(
       localPortfolio,
       alpacaPositions,
@@ -79,20 +79,20 @@ async function performPortfolioUpdate(options = {}) {
     );
 
     // 4. Get latest market data for all positions
-    logInstance.info("Fetching market data for portfolio positions");
+    logInstance.debug("Fetching market data for portfolio positions");
     const marketData = await marketDataService.getPortfolioMarketData(
       mergedPortfolio
     );
 
     // 5. Update portfolio positions with latest prices
-    logInstance.info("Updating portfolio positions with market data");
+    logInstance.debug("Updating portfolio positions with market data");
     const updatedPortfolio = await portfolioService.updatePortfolioPositions(
       mergedPortfolio,
       marketData
     );
 
     // 6. Calculate updated performance metrics
-    logInstance.info("Calculating performance metrics");
+    logInstance.debug("Calculating performance metrics");
     const performanceMetrics =
       await portfolioService.calculatePerformanceMetrics(updatedPortfolio);
 
@@ -110,7 +110,7 @@ async function performPortfolioUpdate(options = {}) {
       timestamp: new Date().toISOString(),
     };
   } catch (error) {
-    logInstance.error(`Portfolio update failed`, error);
+    logInstance.error(`Portfolio update failed`, { error: error.message });
 
     // Send error alert if error handler provided
     if (errorHandlerInstance) {
@@ -120,7 +120,9 @@ async function performPortfolioUpdate(options = {}) {
           operation: "portfolio_update_processing",
         });
       } catch (alertError) {
-        logInstance.error("Failed to send error alert", alertError);
+        logInstance.error("Failed to send error alert", {
+          error: alertError.message,
+        });
       }
     }
 

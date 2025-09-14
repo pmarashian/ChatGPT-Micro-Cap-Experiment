@@ -91,7 +91,7 @@ class BrokerageService {
         unrealizedPnLPercent: parseFloat(position.unrealized_plpc),
       }));
 
-      this.logger.info(
+      this.logger.debug(
         `Retrieved ${formattedPositions.length} positions from brokerage`
       );
       return formattedPositions;
